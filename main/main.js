@@ -2,7 +2,7 @@ const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const log = require('electron-log');
-const WebSocket = require('ws');
+const WebSocketBridge = require('../bridge/websocket_bridge');
 
 // Configure logging
 log.transports.file.level = 'debug';
@@ -11,8 +11,7 @@ log.transports.console.level = 'debug';
 // Global variables for process management
 let mainWindow;
 let pythonProcess;
-let webSocketClient;
-let wsConnectionReady = false;
+let wsBridge;
 // Better development mode detection
 let isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -69,123 +68,102 @@ function createWindow() {
   // Start Python backend with WebSocket server
   startPythonBackend();
   
-  // Setup WebSocket client connection to backend
+  // Setup WebSocket bridge connection to backend
   setTimeout(() => {
-    setupWebSocketClient();
+    setupWebSocketBridge();
   }, 3000); // Wait 3 seconds for Python backend to start
 }
 
 /**
- * Setup WebSocket client connection to Python backend
+ * Setup WebSocket bridge connection to Python backend
  */
-function setupWebSocketClient() {
-  console.log('🔌 [MAIN] Setting up WebSocket client connection to backend...');
-  log.info('Setting up WebSocket client connection');
+function setupWebSocketBridge() {
+  console.log('🔌 [MAIN] Setting up WebSocket bridge connection to backend...');
+  log.info('Setting up WebSocket bridge connection');
   
-  const wsUrl = 'ws://localhost:8765';
+  // Create bridge instance
+  wsBridge = new WebSocketBridge('ws://localhost:8765');
   
-  try {
-    webSocketClient = new WebSocket(wsUrl);
+  // Set up event handlers
+  wsBridge.on('connected', () => {
+    console.log('✅ [MAIN] WebSocket bridge connected to backend');
+    log.info('WebSocket bridge connected');
     
-    webSocketClient.on('open', () => {
-      console.log('✅ [MAIN] WebSocket connection established with backend');
-      log.info('WebSocket connection established');
-      wsConnectionReady = true;
-      
-      // Send initial status check
-      sendWebSocketCommand('status', {});
-    });
+    // Send initial status check
+    wsBridge.sendCommand('status', {});
+  });
+  
+  wsBridge.on('disconnected', (data) => {
+    console.log('🔴 [MAIN] WebSocket bridge disconnected:', data);
+    log.info('WebSocket bridge disconnected', data);
+  });
+  
+  wsBridge.on('error', (error) => {
+    console.error('❌ [MAIN] WebSocket bridge error:', error);
+    log.error('WebSocket bridge error', { error: error.message });
+  });
+  
+  // Handle all message types and forward to renderer
+  wsBridge.on('message', (message) => {
+    console.log('📨 [MAIN] Received bridge message:', message);
     
-    webSocketClient.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        console.log('📨 [MAIN] Received WebSocket message:', message);
-        
-        // Forward real-time updates to renderer
-        if (mainWindow && mainWindow.webContents) {
-          mainWindow.webContents.send('backend-update', message);
-        }
-      } catch (error) {
-        console.error('❌ [MAIN] Error parsing WebSocket message:', error);
-      }
-    });
-    
-    webSocketClient.on('close', () => {
-      console.log('🔌 [MAIN] WebSocket connection closed');
-      log.info('WebSocket connection closed');
-      wsConnectionReady = false;
-      
-      // Attempt to reconnect after 5 seconds
-      setTimeout(() => {
-        console.log('🔄 [MAIN] Attempting to reconnect WebSocket...');
-        setupWebSocketClient();
-      }, 5000);
-    });
-    
-    webSocketClient.on('error', (error) => {
-      console.error('❌ [MAIN] WebSocket error:', error);
-      log.error('WebSocket error', { error: error.message });
-      wsConnectionReady = false;
-    });
-    
-  } catch (error) {
-    console.error('❌ [MAIN] Failed to create WebSocket client:', error);
-    log.error('Failed to create WebSocket client', { error: error.message });
-  }
+    // Forward real-time updates to renderer
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('backend-update', message);
+    }
+  });
+  
+  // Handle specific event types
+  wsBridge.on('system', (data) => {
+    console.log('🔔 [MAIN] System event received:', data);
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('backend-update', { type: 'system', ...data });
+    }
+  });
+  
+  wsBridge.on('response', (data) => {
+    console.log('📋 [MAIN] Command response received:', data);
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('backend-update', { type: 'response', ...data });
+    }
+  });
+  
+  wsBridge.on('deploy_detected', (data) => {
+    console.log('🚀 [MAIN] Deploy detected event received:', data);
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('backend-update', { type: 'deploy_detected', data });
+    }
+  });
+  
+  wsBridge.on('task_selected', (data) => {
+    console.log('🎯 [MAIN] Task selected event received:', data);
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('backend-update', { type: 'task_selected', data });
+    }
+  });
+  
+  // Connect to backend
+  wsBridge.connect();
 }
 
 /**
- * Send command to backend via WebSocket
+ * Send command to backend via WebSocket bridge
  */
-async function sendWebSocketCommand(command, data, timeout = 10000) {
-  return new Promise((resolve, reject) => {
-    if (!wsConnectionReady || !webSocketClient) {
-      reject(new Error('WebSocket not connected'));
-      return;
-    }
-    
-    const message = {
-      command: command,
-      data: data
-    };
-    
-    console.log(`📡 [MAIN] Sending WebSocket command: ${command}`, data);
-    
-    // Set up one-time response handler
-    const responseHandler = (responseData) => {
-      try {
-        const response = JSON.parse(responseData.toString());
-        console.log(`📨 [MAIN] Received response for ${command}:`, response);
-        
-        webSocketClient.off('message', responseHandler);
-        clearTimeout(timeoutHandler);
-        resolve(response);
-      } catch (error) {
-        console.error('❌ [MAIN] Error parsing response:', error);
-        webSocketClient.off('message', responseHandler);
-        clearTimeout(timeoutHandler);
-        reject(error);
-      }
-    };
-    
-    // Set up timeout
-    const timeoutHandler = setTimeout(() => {
-      webSocketClient.off('message', responseHandler);
-      reject(new Error(`Command timeout: ${command}`));
-    }, timeout);
-    
-    // Listen for next response (assumes immediate response)
-    webSocketClient.once('message', responseHandler);
-    
-    // Send the command
-    try {
-      webSocketClient.send(JSON.stringify(message));
-    } catch (error) {
-      webSocketClient.off('message', responseHandler);
-      clearTimeout(timeoutHandler);
-      reject(error);
-    }
-  });
+async function sendBridgeCommand(command, data, timeout = 10000) {
+  if (!wsBridge) {
+    throw new Error('WebSocket bridge not initialized');
+  }
+  
+  console.log(`📡 [MAIN] Sending bridge command: ${command}`, data);
+  
+  try {
+    const response = await wsBridge.sendCommand(command, data);
+    console.log(`📨 [MAIN] Bridge command response for ${command}:`, response);
+    return response;
+  } catch (error) {
+    console.error(`❌ [MAIN] Bridge command failed: ${command}`, error);
+    throw error;
+  }
 }
 
 /**
@@ -201,7 +179,7 @@ function setupIPC() {
     log.info(`Python command received: ${command}`, { data });
     
     try {
-      const response = await sendWebSocketCommand(command, data);
+      const response = await sendBridgeCommand(command, data);
       return response;
     } catch (error) {
       console.error(`❌ [MAIN] Python command failed: ${command}`, error);
@@ -228,7 +206,7 @@ function setupIPC() {
         throw new Error(`Unknown project action: ${action}`);
       }
       
-      const response = await sendWebSocketCommand(command, projectData);
+      const response = await sendBridgeCommand(command, projectData);
       return response;
     } catch (error) {
       console.error(`❌ [MAIN] Project action failed: ${action}`, error);
@@ -242,7 +220,7 @@ function setupIPC() {
     log.info(`Log request: ${logType}`);
     
     try {
-      const response = await sendWebSocketCommand('get-logs', { logType });
+      const response = await sendBridgeCommand('get-logs', { logType });
       return response;
     } catch (error) {
       console.error(`❌ [MAIN] Log request failed: ${logType}`, error);
@@ -372,12 +350,11 @@ app.on('before-quit', () => {
   console.log('🛑 [MAIN] Application shutting down...');
   log.info('Application shutting down');
   
-  // Cleanup WebSocket connection
-  if (webSocketClient) {
-    console.log('🔌 [MAIN] Closing WebSocket connection...');
-    log.info('Closing WebSocket connection');
-    webSocketClient.close();
-    wsConnectionReady = false;
+  // Cleanup WebSocket bridge connection
+  if (wsBridge) {
+    console.log('🔌 [MAIN] Disconnecting WebSocket bridge...');
+    log.info('Disconnecting WebSocket bridge');
+    wsBridge.disconnect();
   }
   
   // Cleanup Python process
