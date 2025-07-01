@@ -32,6 +32,11 @@ from timer import deploy_timer
 from project_manager import project_manager
 from logger import activity_logger
 
+# Import Week 3 modules
+from tasks import task_selector
+from redirect import app_redirector
+from notification import notification_manager
+
 # Configure structured logging
 structlog.configure(
     processors=[
@@ -50,13 +55,13 @@ class DeployBotState:
     """Shared state for the DeployBot LangGraph system"""
     
     def __init__(self):
-        self.monitoring_active = False
-        self.current_project = None
-        self.deploy_detected = False
-        self.selected_task = None
-        self.timer_active = False
-        self.websocket_clients = set()
-        self.last_deploy_time = None
+        self.monitoring_active: bool = False
+        self.current_project: Optional[str] = None
+        self.deploy_detected: bool = False
+        self.selected_task: Optional[Dict[str, Any]] = None
+        self.timer_active: bool = False
+        self.websocket_clients: set = set()
+        self.last_deploy_time: Optional[datetime] = None
         
         logger.info("🤖 [STATE] DeployBot state initialized")
 
@@ -75,8 +80,8 @@ class WebSocketServer:
         self.initialize_modules()
     
     def initialize_modules(self):
-        """Initialize and configure Week 2 modules"""
-        logger.info("🔧 [INIT] Initializing Week 2 modules...")
+        """Initialize and configure Week 2 & 3 modules"""
+        logger.info("🔧 [INIT] Initializing Week 2 & 3 modules...")
         
         # Set up deploy event callbacks
         deploy_monitor.set_deploy_detected_callback(self.on_deploy_detected)
@@ -85,10 +90,13 @@ class WebSocketServer:
         # Connect timer to WebSocket for real-time updates  
         deploy_timer.set_websocket_server(self)
         
-        logger.info("✅ [INIT] Week 2 modules initialized")
+        # Week 3: Connect notification manager to WebSocket
+        notification_manager.set_websocket_server(self)
+        
+        logger.info("✅ [INIT] Week 2 & 3 modules initialized")
     
     async def on_deploy_detected(self, project_name: str, deploy_command: str, project_path: str):
-        """Called when a deploy is detected"""
+        """Called when a deploy is detected - Week 3 enhanced workflow"""
         logger.info("🚀 [DEPLOY] Deploy detected", project=project_name, command=deploy_command)
         
         # Update state
@@ -102,6 +110,13 @@ class WebSocketServer:
         timer_duration = 1800  # 30 minutes
         await deploy_timer.start_timer(project_name, timer_duration, deploy_command)
         
+        # Week 3: Send immediate deploy detected notification
+        await notification_manager.notify_deploy_detected(project_name, deploy_command, timer_duration)
+        
+        # Week 3: Schedule task suggestion after grace period
+        grace_period = notification_manager.preferences["grace_period"]  # 3 minutes default
+        asyncio.create_task(self._schedule_task_suggestion(project_name, project_path, deploy_command, grace_period))
+        
         # Notify frontend
         await self.broadcast({
             "type": "deploy",
@@ -110,10 +125,77 @@ class WebSocketServer:
                 "project": project_name,
                 "command": deploy_command,
                 "timer_duration": timer_duration,
+                "grace_period": grace_period,
                 "timestamp": datetime.now().isoformat()
             }
-        })
+                })
     
+    async def _schedule_task_suggestion(self, project_name: str, project_path: str, deploy_command: str, grace_period: int):
+        """Schedule task suggestion after grace period - Week 3 workflow"""
+        logger.info("⏰ [WORKFLOW] Scheduling task suggestion", 
+                   project=project_name, grace_period=grace_period)
+        
+        # Wait for grace period
+        await asyncio.sleep(grace_period)
+        
+        # Check if deploy is still active
+        if not deploybot_state.deploy_detected or deploybot_state.current_project != project_name:
+            logger.info("🚫 [WORKFLOW] Deploy completed before task suggestion - cancelling")
+            return
+        
+        # Week 3: Select best alternative task
+        context = {
+            "project_name": project_name,
+            "project_path": project_path,
+            "deploy_command": deploy_command,
+            "deploy_active": True,
+            "timer_duration": 1800,
+            "use_llm": True
+        }
+        
+        try:
+            selected_task = await task_selector.select_best_task(project_path, context)
+            
+            if selected_task:
+                # Store selected task in state
+                deploybot_state.selected_task = selected_task
+                
+                # Log task selection
+                await activity_logger.log_task_selected(
+                    project_name, 
+                    selected_task['text'], 
+                    selected_task.get('tags', []),
+                    selected_task.get('app', 'Unknown'),
+                    project_path
+                )
+                
+                # Week 3: Send task suggestion notification
+                notification_id = await notification_manager.notify_task_suggestion(
+                    project_name, selected_task, context
+                )
+                
+                # Notify frontend
+                await self.broadcast({
+                    "type": "task",
+                    "event": "task_suggested",
+                    "data": {
+                        "project": project_name,
+                        "task": selected_task,
+                        "context": context,
+                        "notification_id": notification_id,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                })
+                
+                logger.info("✅ [WORKFLOW] Task suggestion completed", 
+                           task=selected_task['text'], app=selected_task.get('app'))
+                
+            else:
+                logger.warning("⚠️ [WORKFLOW] No suitable tasks found for suggestion")
+                
+        except Exception as e:
+            logger.error("❌ [WORKFLOW] Error in task suggestion workflow", error=str(e))
+
     async def on_deploy_completed(self, project_name: str, deploy_command: str, exit_code: int, project_path: str):
         """Called when a deploy completes"""
         logger.info("✅ [DEPLOY] Deploy completed", project=project_name, exit_code=exit_code)
@@ -139,7 +221,6 @@ class WebSocketServer:
                 "timestamp": datetime.now().isoformat()
             }
         })
-        logger.info("🔌 [WEBSOCKET] WebSocket server initialized", host=host, port=port)
 
     async def register_client(self, websocket):
         """Register a new WebSocket client"""
@@ -390,6 +471,74 @@ class WebSocketServer:
                     "selected_task": selected_task,
                     "project": project_name
                 }
+            
+            # Week 3: Comprehensive workflow test
+            elif command == "test-week3-workflow":
+                project_name = data.get("project_name", "DemoProject")
+                
+                try:
+                    logger.info("🧪 [TEST] Starting Week 3 comprehensive workflow test")
+                    
+                    # Test 1: Task selection
+                    projects_root = Path(__file__).parent.parent / "projects"
+                    project_path = str(projects_root / project_name)
+                    
+                    context = {
+                        "project_name": project_name,
+                        "project_path": project_path,
+                        "deploy_active": True,
+                        "timer_duration": 1800,
+                        "use_llm": False  # Use heuristic for testing
+                    }
+                    
+                    selected_task = await task_selector.select_best_task(project_path, context)
+                    
+                    # Test 2: Notification system
+                    notification_id = None
+                    if selected_task:
+                        notification_id = await notification_manager.notify_task_suggestion(
+                            project_name, selected_task, context
+                        )
+                    
+                    # Test 3: App redirection (dry run)
+                    redirect_result = None
+                    if selected_task:
+                        redirect_result = await app_redirector.redirect_to_task(selected_task, context)
+                    
+                    # Test 4: Get task statistics
+                    task_stats = await task_selector.get_task_statistics(project_path)
+                    
+                    return {
+                        "success": True,
+                        "tests": {
+                            "task_selection": {
+                                "success": selected_task is not None,
+                                "selected_task": selected_task
+                            },
+                            "notification": {
+                                "success": notification_id is not None,
+                                "notification_id": notification_id
+                            },
+                            "redirection": {
+                                "success": redirect_result is not None and redirect_result.get("success", False),
+                                "redirect_result": redirect_result
+                            },
+                            "task_statistics": {
+                                "success": "error" not in task_stats,
+                                "stats": task_stats
+                            }
+                        },
+                        "project_name": project_name,
+                        "message": "Week 3 workflow test completed"
+                    }
+                    
+                except Exception as e:
+                    logger.error("❌ [TEST] Week 3 workflow test failed", error=str(e))
+                    return {
+                        "success": False,
+                        "error": str(e),
+                        "message": "Week 3 workflow test failed"
+                    }
                 
             elif command == "open-app":
                 app_name = data.get("app")
@@ -408,6 +557,78 @@ class WebSocketServer:
                     }
                 else:
                     return {"success": False, "message": "No app specified"}
+            
+            # Week 3: Enhanced task redirection
+            elif command == "redirect-to-task":
+                task_data = data.get("task")
+                context = data.get("context", {})
+                
+                if task_data:
+                    try:
+                        redirect_result = await app_redirector.redirect_to_task(task_data, context)
+                        
+                        # Log successful redirection
+                        if redirect_result.get("success") and context.get("project_name"):
+                            await activity_logger.log_app_opened(
+                                context["project_name"],
+                                redirect_result.get("app", task_data.get("app", "Unknown")),
+                                task_data.get("text", "")
+                            )
+                        
+                        return {
+                            "success": redirect_result.get("success", False),
+                            "redirect_result": redirect_result,
+                            "task": task_data,
+                            "message": "Task redirection completed"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [REDIRECT] Task redirection failed", error=str(e))
+                        return {"success": False, "error": str(e), "message": "Task redirection failed"}
+                else:
+                    return {"success": False, "message": "No task data provided"}
+            
+            # Week 3: Notification response handling
+            elif command == "notification-response":
+                notification_id = data.get("notification_id")
+                action = data.get("action")
+                additional_data = data.get("additional_data", {})
+                
+                if notification_id and action:
+                    try:
+                        success = await notification_manager.handle_notification_response(
+                            notification_id, action, additional_data
+                        )
+                        return {
+                            "success": success,
+                            "notification_id": notification_id,
+                            "action": action,
+                            "message": "Notification response processed"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [NOTIFY] Notification response failed", error=str(e))
+                        return {"success": False, "error": str(e), "message": "Notification response failed"}
+                else:
+                    return {"success": False, "message": "Missing notification_id or action"}
+            
+            # Week 3: Get task suggestions
+            elif command == "get-task-suggestions":
+                project_path = data.get("project_path")
+                context = data.get("context", {})
+                
+                if project_path:
+                    try:
+                        task = await task_selector.select_best_task(project_path, context)
+                        return {
+                            "success": True,
+                            "task": task,
+                            "project_path": project_path,
+                            "message": "Task suggestion retrieved"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [TASKS] Task suggestion failed", error=str(e))
+                        return {"success": False, "error": str(e), "message": "Task suggestion failed"}
+                else:
+                    return {"success": False, "message": "No project path provided"}
                 
             # Deploy Simulation for Testing
             elif command == "simulate-deploy":
@@ -432,7 +653,7 @@ class WebSocketServer:
         """Start the WebSocket server"""
         logger.info("🚀 [WEBSOCKET] Starting WebSocket server", host=self.host, port=self.port)
         
-        async def handle_client(websocket, path):
+        async def handle_client(websocket):
             await self.register_client(websocket)
             try:
                 async for message in websocket:
@@ -463,27 +684,50 @@ async def detect_deploy(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 async def select_task(state: Dict[str, Any]) -> Dict[str, Any]:
-    """LangGraph node: Select alternative task based on context"""
-    logger.info("🎯 [LANGGRAPH] Selecting alternative task...")
+    """LangGraph node: Select alternative task based on context - Week 3 Enhanced"""
+    logger.info("🎯 [LANGGRAPH] Selecting alternative task using Week 3 logic...")
     
-    # Mock task selection - in Week 3 we'll implement real TODO.md parsing
-    mock_tasks = [
-        {"text": "Write product video script", "tags": ["#short", "#creative"], "app": "Notion"},
-        {"text": "Review Firebase rules", "tags": ["#backend", "#research"], "app": "VSCode"},
-        {"text": "Update documentation", "tags": ["#writing", "#long"], "app": "Bear"},
-    ]
-    
-    # Filter out backend tasks during deploy (simple heuristic)
-    suitable_tasks = [task for task in mock_tasks if "#backend" not in task.get("tags", [])]
-    
-    if suitable_tasks:
-        selected = suitable_tasks[0]  # Simple selection for now
-        state["selected_task"] = selected
-        deploybot_state.selected_task = selected
-        logger.info("✅ [LANGGRAPH] Task selected", task=selected["text"], app=selected["app"])
-    else:
-        logger.warning("⚠️ [LANGGRAPH] No suitable tasks found")
+    project_name = state.get("project") or deploybot_state.current_project
+    if not project_name:
+        logger.warning("⚠️ [LANGGRAPH] No project available for task selection")
         state["selected_task"] = None
+        return state
+    
+    # Get project path
+    projects_root = Path(__file__).parent.parent / "projects"
+    project_path = str(projects_root / project_name)
+    
+    # Prepare context for task selection
+    context = {
+        "project_name": project_name,
+        "project_path": project_path,
+        "deploy_active": deploybot_state.deploy_detected,
+        "timer_duration": 1800,  # 30 minutes
+        "use_llm": True
+    }
+    
+    try:
+        # Week 3: Use real task selector
+        selected_task = await task_selector.select_best_task(project_path, context)
+        
+        if selected_task:
+            state["selected_task"] = selected_task
+            deploybot_state.selected_task = selected_task
+            logger.info("✅ [LANGGRAPH] Task selected using Week 3 logic", 
+                       task=selected_task["text"], 
+                       app=selected_task.get("app", "Unknown"),
+                       method="real_selection")
+        else:
+            logger.warning("⚠️ [LANGGRAPH] No suitable tasks found")
+            state["selected_task"] = None
+            
+    except Exception as e:
+        logger.error("❌ [LANGGRAPH] Error in task selection", error=str(e))
+        # Fallback to simple mock for testing
+        fallback_task = {"text": "Work on documentation", "tags": ["#writing"], "app": "Bear"}
+        state["selected_task"] = fallback_task
+        deploybot_state.selected_task = fallback_task
+        logger.info("🔄 [LANGGRAPH] Using fallback task due to error")
     
     return state
 
@@ -499,7 +743,7 @@ async def start_timer(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 # Helper functions
-async def run_task_selection_test(project_name: str) -> Dict[str, Any]:
+async def run_task_selection_test(project_name: str) -> Optional[Dict[str, Any]]:
     """Test the task selection logic"""
     logger.info("🧪 [TEST] Running task selection test", project=project_name)
     
