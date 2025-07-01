@@ -1,0 +1,115 @@
+# === DeployBot .gitignore ===
+
+# === Node.js ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === Python ===
+# Virtual environments
+deploybot-env/
+venv/
+env/
+.venv/
+.env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# === Build artifacts ===
+dist/
+build/
+*.tgz
+*.tar.gz
+
+# === Electron ===
+# Electron build outputs
+out/
+release/
+
+# === IDE/Editor files ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# === OS generated files ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# === Environment variables ===
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# === Logs ===
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Log files in project directories
+projects/*/logs/
+projects/*/logs/*
+
+# === Runtime and temporary files ===
+tmp/
+temp/
+.tmp/
+.temp/
+
+# === Package manager ===
+.npm
+.yarn-integrity
+
+# === Electron-specific ===
+.electron-gyp
+
+# === Python-specific ===
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# === DeployBot specific ===
+# User projects (keep DemoProject as template)
+projects/*
+!projects/DemoProject/
+# But ignore logs in DemoProject too
+projects/DemoProject/logs/
+
+# Deploy wrapper installation artifacts
+.deploybot/
+
+# === Development ===
+coverage/
+.nyc_output/
+.cache/
+.parcel-cache/
+
+# === Documentation build ===
+docs/_build/
+docs/.doctrees/
+
+# === Test artifacts ===
+test-results/
+playwright-report/
+playwright/.cache/ 

@@ -1,0 +1,48 @@
+{
+  "name": "deploybot",
+  "version": "1.0.0",
+  "description": "Personal desktop productivity assistant that detects backend deployment events and redirects to productive tasks",
+  "main": "main/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "wait-on http://localhost:3000 && NODE_ENV=development electron .",
+    "build": "vite build",
+    "build:electron": "electron-builder",
+    "start": "electron .",
+    "preview": "vite preview"
+  },
+  "keywords": ["electron", "productivity", "deployment", "langgraph", "desktop"],
+  "author": "DeployBot Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
+    "electron": "^29.1.4",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3",
+    "vite": "^5.2.0",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "ws": "^8.17.0",
+    "electron-log": "^5.1.2"
+  },
+  "build": {
+    "appId": "com.deploybot.app",
+    "productName": "DeployBot",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main/**/*",
+      "dist/**/*"
+    ]
+  }
+} 

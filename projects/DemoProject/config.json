@@ -1,0 +1,40 @@
+{
+  "projectName": "DemoProject",
+  "description": "Example project for DeployBot demonstration and testing",
+  "version": "1.0.0",
+  "createdAt": "2024-01-15T10:30:00.000Z",
+  "lastModified": "2024-01-15T15:45:00.000Z",
+  "backendServices": [
+    "firebase",
+    "vercel",
+    "netlify"
+  ],
+  "deployCommands": [
+    "firebase deploy",
+    "firebase deploy --only functions",
+    "firebase deploy --only hosting",
+    "vercel --prod",
+    "netlify deploy --prod"
+  ],
+  "settings": {
+    "defaultTimer": 1800,
+    "graceperiod": 180,
+    "autoRedirect": true,
+    "excludeTags": ["#backend"],
+    "preferredTags": ["#short", "#solo"]
+  },
+  "taskMappings": {
+    "writing": "Bear",
+    "creative": "Figma",
+    "research": "Safari",
+    "code": "VSCode",
+    "design": "Figma",
+    "business": "Notion"
+  },
+  "metadata": {
+    "totalTasks": 10,
+    "completedTasks": 3,
+    "lastDeployDetected": null,
+    "lastTaskSelected": null
+  }
+} 
