@@ -13,16 +13,50 @@ const CustomNotification = ({ notification, onAction }) => {
     setTimeout(() => setIsVisible(true), 100);
   }, []);
 
-  const handleAction = (action, data = {}) => {
+  const handleAction = async (action, data = {}) => {
     console.log('🔔 [NOTIFICATION] Action triggered:', action, data);
     
-    // Add exit animation
-    setIsVisible(false);
-    
-    // Call action handler after animation
-    setTimeout(() => {
-      onAction(action, data);
-    }, 300);
+    // Handle task switching actions directly using the working path
+    if (action === 'switch_now' || action === 'switch_to_task') {
+      const task = notification.data?.task;
+      const projectName = notification.data?.project_name;
+      
+      if (task && window.electronAPI && window.electronAPI.tasks) {
+        console.log('🔀 [NOTIFICATION] Using working redirect path for task switch:', task);
+        
+        // Use the SAME working path as the "Suggest" button
+        const context = {
+          project_name: projectName,
+          project_path: notification.data?.context?.project_path,
+          redirect_reason: 'notification_task_switch'
+        };
+        
+        try {
+          const response = await window.electronAPI.tasks.redirectToTask(task, context);
+          console.log('✅ [NOTIFICATION] Task redirection successful:', response);
+        } catch (error) {
+          console.error('❌ [NOTIFICATION] Task redirection failed:', error);
+        }
+      }
+      
+      // Add exit animation and close
+      setIsVisible(false);
+      setTimeout(() => {
+        onAction('dismiss', {});
+      }, 300);
+      
+    } else {
+      // Handle other actions through normal notification system
+      // Add exit animation
+      setIsVisible(false);
+      
+      // Call action handler after animation
+      // Use shorter delay for snooze actions since notification should dismiss immediately
+      const delay = action.includes('snooze') ? 100 : 300;
+      setTimeout(() => {
+        onAction(action, data);
+      }, delay);
+    }
   };
 
   const handleDismiss = () => {
@@ -179,26 +213,7 @@ const CustomNotification = ({ notification, onAction }) => {
             </button>
           )}
           
-          {/* Timer-related actions */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleAction('view_timer');
-            }}
-            className="px-2 py-0.5 bg-blue-600 text-white text-xs rounded-full hover:bg-blue-700 transition-colors duration-150 font-medium"
-          >
-            Timer
-          </button>
-          
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleAction('start_new_timer', { duration: 1800 });
-            }}
-            className="px-2 py-0.5 bg-green-600 text-white text-xs rounded-full hover:bg-green-700 transition-colors duration-150 font-medium"
-          >
-            New
-          </button>
+          {/* Timer and New buttons removed - functionality was redundant */}
           
           {/* General actions */}
           <button
@@ -316,20 +331,7 @@ const CustomNotification = ({ notification, onAction }) => {
             {renderActionButtons()}
           </div>
 
-          {/* Progress indicator for task suggestions */}
-          {notification.data?.type === 'task_suggestion' && (
-            <div className="mt-2">
-              <div className="text-xs text-gray-500 mb-1">
-                Auto-dismiss in 10s
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-1">
-                <div 
-                  className="bg-purple-600 h-1 rounded-full animate-shrink"
-                  style={{ animation: 'shrink 10s linear forwards' }}
-                ></div>
-              </div>
-            </div>
-          )}
+          {/* Notifications now persist until manually dismissed */}
         </div>
 
         {/* Subtle gradient overlay */}
@@ -337,11 +339,6 @@ const CustomNotification = ({ notification, onAction }) => {
       </div>
 
       <style jsx>{`
-        @keyframes shrink {
-          from { width: 100%; }
-          to { width: 0%; }
-        }
-        
         @keyframes shimmer {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
@@ -349,10 +346,6 @@ const CustomNotification = ({ notification, onAction }) => {
         
         .animate-shimmer {
           animation: shimmer 3s ease-in-out infinite;
-        }
-        
-        .animate-shrink {
-          animation: shrink 10s linear forwards;
         }
       `}</style>
     </div>

@@ -210,13 +210,19 @@ class ProcessManager extends EventEmitter {
         console.log(`📦 [PROCESS_MANAGER] Using extracted backend files in: ${tempDir}`);
       }
       
-      // Determine Python executable
-      const pythonExecutable = path.join(__dirname, '../deploybot-env/bin/python3');
-      console.log(`🐍 [PROCESS_MANAGER] Using Python executable: ${pythonExecutable}`);
+      // Determine Python executable with fallbacks
+      let pythonExecutable;
+      const virtualEnvPython = path.join(__dirname, '../deploybot-env/bin/python3');
+      const systemPython3 = 'python3';
       
-      // Verify Python executable exists
-      if (!fs.existsSync(pythonExecutable)) {
-        throw new Error(`Python executable not found: ${pythonExecutable}`);
+      if (fs.existsSync(virtualEnvPython)) {
+        pythonExecutable = virtualEnvPython;
+        console.log(`🐍 [PROCESS_MANAGER] Using virtual environment Python: ${pythonExecutable}`);
+      } else {
+        // Fallback to system python3
+        pythonExecutable = systemPython3;
+        console.log(`🐍 [PROCESS_MANAGER] Using system Python3: ${pythonExecutable}`);
+        console.log(`⚠️ [PROCESS_MANAGER] Virtual environment not found at: ${virtualEnvPython}`);
       }
       
       // Verify Python script exists
@@ -232,7 +238,9 @@ class ProcessManager extends EventEmitter {
           ...process.env,
           PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
           PYTHONUNBUFFERED: '1', // Ensure immediate output
-          DEPLOYBOT_PROJECTS_ROOT: path.join(process.cwd(), 'projects') // Point to real projects directory
+          DEPLOYBOT_PROJECTS_ROOT: path.join(process.cwd(), 'projects'), // Point to real projects directory
+          PYTHON_EXECUTABLE: pythonExecutable, // Pass the Python executable to the backend
+          DEPLOYBOT_DEBUG: '1' // Enable debug mode for better logging
         }
       });
       

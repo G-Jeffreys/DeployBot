@@ -655,6 +655,82 @@ class WebSocketServer:
                 else:
                     return {"success": False, "message": "No app specified"}
             
+            # Week 4: Testing and debugging commands
+            elif command == "test-snooze-quick":
+                # Test snooze functionality with 10 second delay for quick testing
+                test_notification = {
+                    "id": f"test_snooze_{int(time.time() * 1000)}",
+                    "template": "task_suggestion", 
+                    "title": "🧪 Test Snooze Notification",
+                    "message": "This notification will snooze for 10 seconds",
+                    "data": {
+                        "type": "task_suggestion",
+                        "project_name": "TestProject",
+                        "task": {
+                            "text": "Test snooze functionality", 
+                            "app": "Bear",
+                            "tags": ["#test"],
+                            "estimated_duration": 5
+                        }
+                    },
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                logger.info("🧪 [TEST] Creating test notification for snooze testing")
+                
+                # Add to active notifications
+                notification_manager.active_notifications[test_notification["id"]] = test_notification
+                
+                # Test snooze with 10 second delay
+                await notification_manager._handle_snooze(
+                    test_notification, 
+                    "snooze", 
+                    {"snooze_minutes": 0.17}  # 10 seconds = 0.17 minutes
+                )
+                
+                return {
+                    "success": True,
+                    "message": "Test snooze triggered - should reappear in 10 seconds",
+                    "notification_id": test_notification["id"]
+                }
+            
+            elif command == "test-bear-redirection":
+                # Test Bear redirection specifically
+                test_task = {
+                    "text": data.get("task_text", "Write documentation for unified notifications"),
+                    "app": "Bear",
+                    "tags": ["#writing", "#docs"],
+                    "estimated_duration": 25
+                }
+                
+                test_context = {
+                    "project_name": data.get("project_name", "DeployBot"),
+                    "deploy_active": True,
+                    "timer_duration": 1800
+                }
+                
+                logger.info("🧪 [TEST] Testing Bear redirection", task=test_task['text'])
+                
+                try:
+                    redirect_result = await app_redirector.redirect_to_task(test_task, test_context)
+                    
+                    return {
+                        "success": redirect_result.get("success", False),
+                        "test_type": "bear_redirection",
+                        "redirect_result": redirect_result,
+                        "task": test_task,
+                        "context": test_context,
+                        "message": f"Bear redirection test {'successful' if redirect_result.get('success') else 'failed'}"
+                    }
+                except Exception as e:
+                    logger.error("❌ [TEST] Bear redirection test failed", error=str(e))
+                    return {
+                        "success": False,
+                        "test_type": "bear_redirection",
+                        "error": str(e),
+                        "message": "Bear redirection test failed with exception"
+                    }
+            
             # Week 3: Enhanced task redirection
             elif command == "redirect-to-task":
                 task_data = data.get("task")
@@ -706,6 +782,45 @@ class WebSocketServer:
                         return {"success": False, "error": str(e), "message": "Notification response failed"}
                 else:
                     return {"success": False, "message": "Missing notification_id or action"}
+            
+            # Week 4: Notification action handling (alias for notification-response)
+            elif command == "notification-action":
+                notification_id = data.get("notification_id")
+                action = data.get("action")
+                # Handle nested data structure from frontend
+                task_data = data.get("data", {})
+                
+                logger.info("🔔 [COMMAND] Processing notification action", 
+                           notification_id=notification_id, 
+                           action=action,
+                           has_task_data=bool(task_data))
+                
+                if notification_id and action:
+                    try:
+                        success = await notification_manager.handle_notification_response(
+                            notification_id, action, task_data
+                        )
+                        return {
+                            "success": success,
+                            "notification_id": notification_id,
+                            "action": action,
+                            "message": "Notification action processed successfully"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [COMMAND] Notification action failed", 
+                                   notification_id=notification_id, 
+                                   action=action, 
+                                   error=str(e))
+                        return {
+                            "success": False, 
+                            "error": str(e), 
+                            "message": "Notification action processing failed"
+                        }
+                else:
+                    return {
+                        "success": False, 
+                        "message": "Missing notification_id or action parameters"
+                    }
             
             # Week 3: Get task suggestions
             elif command == "get-task-suggestions":

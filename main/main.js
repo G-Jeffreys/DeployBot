@@ -197,12 +197,8 @@ function createNotificationWindow(notification) {
     }, 100);
   });
 
-  // Auto-dismiss after 10 seconds if no interaction
-  setTimeout(() => {
-    if (notificationWindows.has(notification.id)) {
-      closeNotificationWindow(notification.id);
-    }
-  }, 10000);
+  // Notifications now persist until manually dismissed
+  // No auto-dismiss timeout - user must explicitly close notifications
 
   // Handle window closed
   notificationWindow.on('closed', () => {

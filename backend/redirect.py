@@ -20,6 +20,9 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Union
 import structlog
 
+# Check if debug mode is enabled
+DEBUG_MODE = os.getenv('DEPLOYBOT_DEBUG', '0') == '1'
+
 logger = structlog.get_logger()
 
 class AppRedirector:
@@ -119,9 +122,10 @@ class AppRedirector:
         }
         
         logger.info("🔀 [REDIRECT] AppRedirector initialized", 
-                   supported_apps=len(self.app_configs))
+                   supported_apps=len(self.app_configs),
+                   debug_mode=DEBUG_MODE)
 
-    async def redirect_to_task(self, task: Dict[str, Any], context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def redirect_to_task(self, task: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Redirect user to the appropriate app for the given task with full context
         
@@ -244,14 +248,37 @@ class AppRedirector:
             action_url = None
             action_type = None
             
-            if app_name == "Bear" and '#writing' in tags:
+            if app_name == "Bear":
+                # Create a new note in Bear (works for any Bear task, not just writing)
                 # Create a new note in Bear with task context
                 note_content = self._generate_bear_note_content(task, context)
+                logger.debug("🐻 [REDIRECT] Generated Bear note content", 
+                           content_length=len(note_content), 
+                           content_preview=note_content[:100])
+                
+                # Try full content first
                 action_url = task_actions['create_note'].format(
                     title=urllib.parse.quote(task_text),
                     content=urllib.parse.quote(note_content)
                 )
+                
+                # If URL is too long, use simplified content
+                if len(action_url) > 2000:
+                    logger.warning("🐻 [REDIRECT] URL too long, using simplified content", 
+                                 original_length=len(action_url))
+                    simplified_content = self._generate_simplified_bear_content(task, context)
+                    action_url = task_actions['create_note'].format(
+                        title=urllib.parse.quote(task_text),
+                        content=urllib.parse.quote(simplified_content)
+                    )
+                    logger.debug("🐻 [REDIRECT] Simplified Bear URL created", 
+                               url_length=len(action_url))
+                
                 action_type = "create_note"
+                
+                logger.debug("🐻 [REDIRECT] Final Bear URL created", 
+                           url_length=len(action_url),
+                           url_preview=action_url[:150])
                 
             elif app_name == "VSCode" and context.get('project_path'):
                 # Open VSCode with project context
@@ -281,19 +308,26 @@ class AppRedirector:
                 action_type = "open_workspace"
             
             if action_url:
-                logger.debug("🔗 [REDIRECT] Attempting deep link", 
-                           app=app_name, action=action_type, url=action_url[:100])
+                logger.info("🔗 [REDIRECT] Attempting deep link", 
+                           app=app_name, action=action_type, url_length=len(action_url))
+                logger.debug("🔗 [REDIRECT] Full URL for debugging", url=action_url)
                 
                 # Execute the deep link
                 if action_url.startswith('http'):
                     # Web URL
+                    logger.debug("🌐 [REDIRECT] Opening web URL")
                     result = await self._open_url(action_url)
                 elif action_url.startswith(('code ', 'open ')):
                     # Command line
+                    logger.debug("🖥️ [REDIRECT] Executing command line")
                     result = await self._execute_command(action_url)
                 else:
                     # App URL scheme
+                    logger.debug("📱 [REDIRECT] Opening app URL scheme")
                     result = await self._open_url_scheme(action_url)
+                
+                logger.info("🔗 [REDIRECT] Deep link execution result", 
+                           app=app_name, action=action_type, success=result)
                 
                 if result:
                     return {
@@ -301,12 +335,15 @@ class AppRedirector:
                         "method": "deep_linking",
                         "action": action_type,
                         "app": app_name,
-                        "url": action_url
+                        "url": action_url[:100] + "..." if len(action_url) > 100 else action_url
                     }
+            else:
+                logger.warning("🔗 [REDIRECT] No action URL generated", 
+                             app=app_name, tags=tags, task_text=task_text[:50])
             
         except Exception as e:
-            logger.warning("⚠️ [REDIRECT] Deep linking failed", 
-                          app=app_name, error=str(e))
+            logger.error("❌ [REDIRECT] Deep linking failed with exception", 
+                        app=app_name, error=str(e), error_type=type(e).__name__)
         
         return {"success": False, "method": "deep_linking"}
 
@@ -383,19 +420,44 @@ class AppRedirector:
             }
 
     async def _execute_subprocess(self, command: List[str], timeout: int = 10) -> subprocess.CompletedProcess:
-        """Execute subprocess command with timeout"""
+        """Execute subprocess command with timeout and enhanced debugging"""
+        
+        if DEBUG_MODE:
+            logger.debug("🖥️ [REDIRECT] Executing subprocess command", 
+                       command=command, timeout=timeout, cwd=os.getcwd())
         
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=timeout
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=None,  # Use current working directory
+                    env=None   # Inherit environment
+                )
             )
-        )
-        return result
+            
+            if DEBUG_MODE:
+                logger.debug("🖥️ [REDIRECT] Subprocess result", 
+                           return_code=result.returncode,
+                           stdout_length=len(result.stdout) if result.stdout else 0,
+                           stderr_length=len(result.stderr) if result.stderr else 0,
+                           stdout_preview=result.stdout[:100] if result.stdout else None,
+                           stderr_preview=result.stderr[:100] if result.stderr else None)
+            
+            return result
+            
+        except subprocess.TimeoutExpired as e:
+            logger.error("⏰ [REDIRECT] Subprocess timeout", 
+                       command=command, timeout=timeout)
+            raise
+        except Exception as e:
+            logger.error("❌ [REDIRECT] Subprocess execution error", 
+                       command=command, error=str(e), error_type=type(e).__name__)
+            raise
 
     async def _execute_command(self, command: str, timeout: int = 10) -> bool:
         """Execute shell command"""
@@ -422,12 +484,31 @@ class AppRedirector:
         """Open app using URL scheme"""
         
         try:
+            logger.debug("📱 [REDIRECT] Executing URL scheme", 
+                        url_length=len(url_scheme), 
+                        scheme=url_scheme.split('://')[0] if '://' in url_scheme else 'unknown')
+            
             command = ['open', url_scheme]
             result = await self._execute_subprocess(command)
-            return result.returncode == 0
+            
+            logger.debug("📱 [REDIRECT] URL scheme execution result", 
+                        return_code=result.returncode,
+                        stdout=result.stdout.strip() if result.stdout else None,
+                        stderr=result.stderr.strip() if result.stderr else None)
+            
+            success = result.returncode == 0
+            
+            if not success:
+                logger.error("❌ [REDIRECT] URL scheme failed", 
+                           return_code=result.returncode,
+                           stderr=result.stderr,
+                           command=' '.join(command))
+                           
+            return success
+            
         except Exception as e:
-            logger.error("❌ [REDIRECT] URL scheme opening failed", 
-                        url_scheme=url_scheme, error=str(e))
+            logger.error("❌ [REDIRECT] URL scheme opening failed with exception", 
+                        url_scheme=url_scheme[:100], error=str(e), error_type=type(e).__name__)
             return False
 
     def _generate_bear_note_content(self, task: Dict[str, Any], context: Dict[str, Any]) -> str:
@@ -462,6 +543,31 @@ class AppRedirector:
             "- [ ] Task started",
             "- [ ] In progress",
             "- [ ] Completed"
+        ])
+        
+        return '\n'.join(content_lines)
+
+    def _generate_simplified_bear_content(self, task: Dict[str, Any], context: Dict[str, Any]) -> str:
+        """Generate simplified Bear note content for URL scheme limits"""
+        
+        content_lines = [
+            f"# {task.get('text', 'Task from DeployBot')}",
+            "",
+            f"Created by DeployBot on {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            ""
+        ]
+        
+        if context.get('project_name'):
+            content_lines.append(f"Project: {context['project_name']}")
+        
+        if task.get('tags'):
+            content_lines.append(f"Tags: {' '.join(task['tags'])}")
+        
+        content_lines.extend([
+            "",
+            "## Notes",
+            "",
+            "Start working on this task..."
         ])
         
         return '\n'.join(content_lines)

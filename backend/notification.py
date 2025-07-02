@@ -10,6 +10,7 @@ This module handles:
 """
 
 import asyncio
+import copy
 import json
 import os
 import subprocess
@@ -571,11 +572,33 @@ You can delete this file after reading the notification.
         
         task_data = notification["data"]["task"]
         project_name = notification["data"]["project_name"]
-        context = notification["data"].get("context", {})
+        original_context = notification["data"].get("context", {})
+        
+        # Build enhanced context with required fields for redirection
+        context = {
+            "project_name": project_name,
+            "project_path": original_context.get("project_path"),
+            "deploy_active": original_context.get("deploy_active", True),
+            "timer_duration": original_context.get("timer_duration", 1800),
+            "redirect_reason": "notification_task_switch"
+        }
+        
+        # If project_path is missing, try to construct it from projects root
+        if not context["project_path"]:
+            from pathlib import Path
+            projects_root = Path(__file__).parent.parent / "projects"
+            # Convert project name to filesystem-safe format
+            safe_project_name = project_name.replace(" ", "_").replace("-", "_")
+            context["project_path"] = str(projects_root / safe_project_name)
+            logger.info("🔀 [NOTIFY] Constructed project path", 
+                       project_name=project_name, 
+                       project_path=context["project_path"])
         
         logger.info("🔀 [NOTIFY] Processing task switch request", 
                    task=task_data.get('text', ''), 
-                   app=task_data.get('app', ''))
+                   app=task_data.get('app', ''),
+                   context_project_path=context.get("project_path"),
+                   has_project_path=bool(context.get("project_path")))
         
         # Import redirect module to handle app opening
         from . import redirect
@@ -612,13 +635,24 @@ You can delete this file after reading the notification.
                    notification_id=notification["id"], 
                    minutes=snooze_minutes)
         
-        # Schedule re-notification
+        # IMPORTANT: Make a deep copy of the notification before removing it
+        # Use deepcopy to ensure nested dicts (like 'data') are properly copied
+        notification_copy = copy.deepcopy(notification)
+        
+        # Remove the current notification from active notifications
+        # This allows the frontend window to close properly
+        if notification["id"] in self.active_notifications:
+            del self.active_notifications[notification["id"]]
+            logger.debug("🗑️ [NOTIFY] Current notification removed for snoozing", 
+                        notification_id=notification["id"])
+        
+        # Schedule re-notification using the copy
         snooze_task = asyncio.create_task(
-            self._reschedule_notification(notification, snooze_minutes * 60)
+            self._reschedule_notification(notification_copy, snooze_minutes * 60)
         )
         
-        # Store snooze task for potential cancellation
-        notification["snooze_task"] = snooze_task
+        # Store snooze task for potential cancellation (store on copy)
+        notification_copy["snooze_task"] = snooze_task
 
     async def _handle_start_new_timer(self, notification: Dict[str, Any], additional_data: Dict[str, Any]):
         """Handle starting a new timer from unified notification"""
@@ -655,24 +689,81 @@ You can delete this file after reading the notification.
     async def _reschedule_notification(self, notification: Dict[str, Any], delay_seconds: int):
         """Reschedule a notification after snooze period"""
         
-        await asyncio.sleep(delay_seconds)
+        original_id = notification.get("id", "unknown")
+        logger.info("⏱️ [NOTIFY] Starting snooze timer", 
+                   original_notification_id=original_id, 
+                   delay_seconds=delay_seconds,
+                   notification_data_keys=list(notification.keys()))
         
-        # Re-send the notification
-        notification["id"] = f"{notification['template']}_resend_{int(time.time() * 1000)}"
-        notification["timestamp"] = datetime.now().isoformat()
-        notification["message"] += " (Reminder)"
-        
-        self.active_notifications[notification["id"]] = notification
-        
-        # Send notifications again
-        if self.preferences["system_notifications_enabled"]:
-            await self._send_system_notification(notification)
-        
-        if self.preferences["in_app_modals_enabled"]:
-            await self._send_in_app_notification(notification)
-        
-        logger.info("🔔 [NOTIFY] Snoozed notification re-sent", 
-                   notification_id=notification["id"])
+        try:
+            # Sleep for the snooze period
+            await asyncio.sleep(delay_seconds)
+            
+            logger.info("⏰ [NOTIFY] Snooze period completed, preparing to resend", 
+                       original_notification_id=original_id)
+            
+            # Re-send the notification with new ID and reminder text
+            new_id = f"{notification['template']}_resend_{int(time.time() * 1000)}"
+            notification["id"] = new_id
+            notification["timestamp"] = datetime.now().isoformat()
+            
+            # Add reminder text if not already present
+            if "(Reminder)" not in notification["message"]:
+                notification["message"] += " (Reminder)"
+            
+            logger.info("🔄 [NOTIFY] Prepared rescheduled notification", 
+                       new_notification_id=new_id,
+                       original_id=original_id,
+                       message=notification["message"][:100])
+            
+            # Store in active notifications
+            self.active_notifications[notification["id"]] = notification
+            logger.debug("💾 [NOTIFY] Stored rescheduled notification in active notifications")
+            
+            # Add to history
+            self._add_to_history(notification)
+            logger.debug("📚 [NOTIFY] Added rescheduled notification to history")
+            
+            # Check if websocket server is available
+            if not self.websocket_server:
+                logger.error("❌ [NOTIFY] WebSocket server not available for rescheduled notification!")
+                return
+            
+            logger.info("📡 [NOTIFY] WebSocket server available, sending custom notification")
+            
+            # Send custom notification first (this is what creates the notification windows)
+            await self._send_custom_notification(notification)
+            logger.info("✅ [NOTIFY] Custom notification sent for rescheduled notification")
+            
+            # Send system notification if enabled (as fallback)
+            if self.preferences["system_notifications_enabled"]:
+                await self._send_system_notification(notification)
+                logger.debug("📱 [NOTIFY] System notification sent for rescheduled notification")
+            
+            # Send in-app notification if enabled
+            if self.preferences["in_app_modals_enabled"]:
+                await self._send_in_app_notification(notification)
+                logger.debug("🖥️ [NOTIFY] In-app notification sent for rescheduled notification")
+            
+            # Notify callbacks
+            await self._notify_callbacks("notification_snoozed_resent", notification)
+            logger.debug("🔔 [NOTIFY] Callbacks notified for rescheduled notification")
+            
+            logger.info("🎉 [NOTIFY] Snoozed notification re-sent successfully", 
+                       notification_id=notification["id"],
+                       original_id=original_id)
+                       
+        except asyncio.CancelledError:
+            logger.warning("⚠️ [NOTIFY] Snooze task was cancelled", 
+                          original_notification_id=original_id)
+            raise
+        except Exception as e:
+            logger.error("❌ [NOTIFY] Error in reschedule notification", 
+                        original_notification_id=original_id,
+                        error=str(e),
+                        error_type=type(e).__name__)
+            # Re-raise the exception to see it in logs
+            raise
 
     async def _auto_dismiss_notification(self, notification_id: str):
         """Auto-dismiss notification after timeout"""

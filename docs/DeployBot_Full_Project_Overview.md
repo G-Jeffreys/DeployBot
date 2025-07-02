@@ -132,3 +132,44 @@ Core tags:
 - **OpenAI API use is minimal** and cached:
   - Only used for task inference if needed.
   - Deploy detection is fully local (no API cost).
+
+---
+
+## 🚨 **CURRENT STATUS - January 2, 2025**
+
+### **CRITICAL ISSUES DISCOVERED**
+
+#### **🔴 Core Notification System Non-Functional**
+- **Issue**: Backend processes notification commands but no visual windows appear
+- **Root Cause**: Backend doesn't send proper WebSocket message format to trigger Electron notification windows
+- **Impact**: CRITICAL - No user feedback during deploy wait periods
+- **Status**: ❌ **BROKEN** - Requires immediate fix
+
+#### **🔴 Task Selection System Failure** 
+- **Issue**: Returns "No tasks found" despite projects having populated TODO.md files
+- **Evidence**: 
+  - `My_Awesome_Project`: 6 pending tasks → "No tasks found"
+  - `DemoProject`: 10 pending tasks → "No tasks found"
+- **Impact**: HIGH - Zero task suggestions generated
+- **Status**: ❌ **BROKEN** - Task parsing logic failure
+
+#### **🔴 Snooze Functionality Broken**
+- **Issue**: Commands process but notifications don't reappear after delay
+- **Context**: Previous fixes implemented but may require restart
+- **Impact**: MEDIUM - Feature completely unusable  
+- **Status**: ❌ **NON-FUNCTIONAL**
+
+### **✅ Working Systems**
+- Electron ↔ Python WebSocket communication
+- App redirection (Bear, Figma, VSCode, etc.)
+- Timer system functionality
+- Process monitoring and logging
+- Deploy command processing
+
+### **🎯 Immediate Action Required**
+1. Fix backend WebSocket notification broadcasting
+2. Debug task selection TODO.md parsing
+3. Verify snooze system functionality
+4. End-to-end integration testing
+
+**Current Priority**: CRITICAL SYSTEM REPAIR before any new feature development.

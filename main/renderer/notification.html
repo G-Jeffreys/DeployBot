@@ -369,15 +369,7 @@
           `;
         }
         
-                 // Timer-related actions
-         buttons += `
-           <button class="notification-btn notification-btn-secondary" onclick="handleAction('view_timer', event)">
-             Timer
-           </button>
-           <button class="notification-btn notification-btn-success" onclick="handleAction('start_new_timer', event)">
-             New
-           </button>
-         `;
+                         // Timer and New buttons removed - functionality was redundant
         
         // General actions
         buttons += `
@@ -422,21 +414,58 @@
       try {
         let data = {};
         
-        // Prepare action-specific data
+        // Handle task switching actions directly using the working path
         if (action === 'switch_now' || action === 'switch_to_task') {
-          data = { task: notificationData.data?.task };
-        } else if (action === 'start_new_timer') {
-          data = { duration: 1800 }; // Default 30 minutes
-        } else if (action === 'snooze') {
-          data = { snooze_minutes: 5 };
+          const task = notificationData.data?.task;
+          const projectName = notificationData.data?.project_name;
+          
+          if (task && window.electronAPI && window.electronAPI.tasks) {
+            console.log('🔀 [NOTIFICATION] Using working redirect path for task switch:', task);
+            
+            // Use the SAME working path as the "Suggest" button
+            const context = {
+              project_name: projectName,
+              project_path: notificationData.data?.context?.project_path,
+              redirect_reason: 'notification_task_switch'
+            };
+            
+            try {
+              const response = await window.electronAPI.tasks.redirectToTask(task, context);
+              console.log('✅ [NOTIFICATION] Task redirection successful:', response);
+            } catch (error) {
+              console.error('❌ [NOTIFICATION] Task redirection failed:', error);
+            }
+          }
+          
+          // Also dismiss the notification through normal path
+          if (window.electronAPI && window.electronAPI.notificationAction) {
+            await window.electronAPI.notificationAction(notificationData.id, 'dismiss', {});
+          }
+          
+        } else {
+          // Handle other actions through normal notification system
+          let data = {};
+          
+          if (action === 'snooze') {
+            data = { snooze_minutes: 5 };
+          }
+          
+          if (window.electronAPI && window.electronAPI.notificationAction) {
+            await window.electronAPI.notificationAction(notificationData.id, action, data);
+          }
         }
         
-        if (window.electronAPI && window.electronAPI.notificationAction) {
-          await window.electronAPI.notificationAction(notificationData.id, action, data);
-        }
-        
-        // Close window after action (except for snooze actions)
-        if (!action.includes('snooze')) {
+        // Close window after action with appropriate delays
+        if (action === 'switch_to_task' || action === 'switch_now') {
+          // Delay closing for app switching to prevent focus conflicts
+          setTimeout(() => {
+            window.close();
+          }, 1000); // 1 second delay to let target app launch
+        } else if (action.includes('snooze')) {
+          // Close immediately for snooze actions - notification is dismissed
+          window.close();
+        } else {
+          // Close immediately for other actions
           window.close();
         }
       } catch (error) {
@@ -460,11 +489,8 @@
       }
     }
 
-    // Auto-dismiss after 10 seconds
-    setTimeout(() => {
-      console.log('🔔 [NOTIFICATION] Auto-dismissing notification');
-      handleDismiss();
-    }, 10000);
+    // Notifications now persist until manually dismissed
+    // No auto-dismiss timeout - user must explicitly close notifications
   </script>
 </body>
 </html> 
