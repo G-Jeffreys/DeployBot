@@ -45,43 +45,43 @@ class NotificationManager:
             "in_app_modals_enabled": True,
             "sound_enabled": True,
             "auto_dismiss_timeout": 0,  # DISABLED - notifications should persist until manually dismissed
-            "grace_period": 0,  # NO GRACE PERIOD - immediate task suggestions
+            "grace_period": 0,  # NO GRACE PERIOD - immediate task suggestions when deploy completes
             "notification_persistence": True
         }
         
         # Notification templates
         self.templates = {
             "deploy_detected": {
-                "title": "🚀 Deploy Detected",
-                "message": "Deployment started: {command}",
+                "title": "🚀 Deploy Started",
+                "message": "Cloud deployment initiated: {command}",
                 "actions": ["View Timer", "Dismiss"],
                 "category": "deploy",
                 "sound": "default"
             },
             "task_suggestion": {
                 "title": "🎯 Task Suggestion",
-                "message": "Switch to: {task_text}",
+                "message": "While waiting for propagation: {task_text}",
                 "actions": ["Switch Now", "Snooze 5min", "Dismiss"],
                 "category": "task",
                 "sound": "default"
             },
             "timer_expiry": {
-                "title": "⏰ Timer Expired",
-                "message": "Deploy timer finished for {project}",
+                "title": "⏰ Propagation Complete",
+                "message": "Cloud deployment ready for {project}",
                 "actions": ["View Project", "Dismiss"],
                 "category": "timer",
                 "sound": "default"
             },
             "deploy_completed": {
-                "title": "✅ Deploy Complete",
-                "message": "Deployment finished: {status}",
+                "title": "✅ Local Deploy Complete",
+                "message": "Starting cloud propagation: {status}",
                 "actions": ["View Logs", "Dismiss"],
                 "category": "deploy",
                 "sound": "success"
             },
             "unified_suggestion": {
-                "title": "🎯⏰ Task & Timer Update", 
-                "message": "Timer update with task suggestion available",
+                "title": "🎯⏰ Task & Timer Update",
+                "message": "Timer update with task suggestion available", 
                 "actions": ["Switch to Task", "Start New Timer", "View Timer", "Snooze", "Dismiss"],
                 "category": "unified",
                 "sound": "default"

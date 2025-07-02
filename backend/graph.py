@@ -186,10 +186,9 @@ class WebSocketServer:
         # Wait for grace period
         await asyncio.sleep(grace_period)
         
-        # Check if deploy is still active
-        if not deploybot_state.deploy_detected or deploybot_state.current_project != project_name:
-            logger.info("🚫 [WORKFLOW] Deploy completed before unified notification - cancelling")
-            return
+        # REMOVED: The backwards cancellation logic that was preventing notifications
+        # The deploy command completing is EXACTLY when we want to show notifications
+        # for the cloud propagation period (Firebase, Vercel, etc. take 10-30 minutes)
         
         # *** BRING DEPLOYBOT TO FOCUS AGAIN FOR UNIFIED NOTIFICATION ***
         logger.info("🔍 [WORKFLOW] Bringing DeployBot window to focus for unified notification")
@@ -203,7 +202,7 @@ class WebSocketServer:
             "project_name": project_name,
             "project_path": project_path,
             "deploy_command": deploy_command,
-            "deploy_active": True,
+            "deploy_active": True,  # Deploy may be done locally, but cloud propagation is active
             "timer_duration": timer_duration,
             "use_llm": True
         }
