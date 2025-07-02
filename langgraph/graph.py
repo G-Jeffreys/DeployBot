@@ -14,7 +14,7 @@ import os
 import sys
 import time
 import websockets
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -103,6 +103,10 @@ class WebSocketServer:
         deploybot_state.deploy_detected = True
         deploybot_state.current_project = project_name
         
+        # *** BRING DEPLOYBOT TO FOCUS ***
+        logger.info("🔍 [DEPLOY] Bringing DeployBot window to focus for deployment")
+        await self._focus_window()
+        
         # Log the event
         await activity_logger.log_deploy_detected(project_name, deploy_command, project_path)
         
@@ -114,7 +118,7 @@ class WebSocketServer:
         await notification_manager.notify_deploy_detected(project_name, deploy_command, timer_duration)
         
         # Week 3: Schedule task suggestion after grace period
-        grace_period = notification_manager.preferences["grace_period"]  # 3 minutes default
+        grace_period = notification_manager.preferences["grace_period"]  # 30 seconds now
         asyncio.create_task(self._schedule_task_suggestion(project_name, project_path, deploy_command, grace_period))
         
         # Notify frontend
@@ -128,7 +132,7 @@ class WebSocketServer:
                 "grace_period": grace_period,
                 "timestamp": datetime.now().isoformat()
             }
-                })
+        })
     
     async def _schedule_task_suggestion(self, project_name: str, project_path: str, deploy_command: str, grace_period: int):
         """Schedule task suggestion after grace period - Week 3 workflow"""
@@ -196,6 +200,10 @@ class WebSocketServer:
         except Exception as e:
             logger.error("❌ [WORKFLOW] Error in task suggestion workflow", error=str(e))
 
+        # *** BRING DEPLOYBOT TO FOCUS AGAIN FOR TASK SUGGESTION ***
+        logger.info("🔍 [WORKFLOW] Bringing DeployBot window to focus for task suggestion")
+        await self._focus_window()
+
     async def on_deploy_completed(self, project_name: str, deploy_command: str, exit_code: int, project_path: str):
         """Called when a deploy completes"""
         logger.info("✅ [DEPLOY] Deploy completed", project=project_name, exit_code=exit_code)
@@ -206,8 +214,9 @@ class WebSocketServer:
         # Log the event
         await activity_logger.log_deploy_completed(project_name, deploy_command, exit_code, project_path)
         
-        # Stop the timer
-        await deploy_timer.stop_timer(project_name, "deploy_completed")
+        # DO NOT stop the timer - it should continue running for the full duration
+        # to enforce waiting period during cloud propagation
+        logger.info("⏰ [DEPLOY] Timer continues running during propagation period", project=project_name)
         
         # Notify frontend
         await self.broadcast({
@@ -640,6 +649,57 @@ class WebSocketServer:
                     return {"success": success, "project": project_name, "command": command_str}
                 else:
                     return {"success": False, "message": "No project specified"}
+            
+            # Activity Logs Management
+            elif command == "get-logs":
+                log_type = data.get("type", "activity")
+                project_name = data.get("project_name")
+                limit = data.get("limit", 100)
+                
+                try:
+                    # For now, return mock activity logs since we don't have a persistent log storage
+                    # In a real implementation, you'd query from activity_logger or a database
+                    mock_logs = [
+                        {
+                            "id": 1,
+                            "timestamp": datetime.now().isoformat(),
+                            "type": "system",
+                            "event": "backend_connected",
+                            "message": "DeployBot backend connected successfully",
+                            "project": deploybot_state.current_project,
+                            "data": {"monitoring_active": deploybot_state.monitoring_active}
+                        },
+                        {
+                            "id": 2,
+                            "timestamp": (datetime.now() - timedelta(minutes=5)).isoformat(),
+                            "type": "project",
+                            "event": "project_loaded",
+                            "message": f"Project {deploybot_state.current_project or 'DemoProject'} loaded successfully",
+                            "project": deploybot_state.current_project or "DemoProject",
+                            "data": {"project_name": deploybot_state.current_project or "DemoProject"}
+                        }
+                    ]
+                    
+                    # Filter by project if specified
+                    if project_name:
+                        filtered_logs = [log for log in mock_logs if log.get("project") == project_name]
+                    else:
+                        filtered_logs = mock_logs
+                    
+                    # Limit results
+                    limited_logs = filtered_logs[:limit]
+                    
+                    return {
+                        "success": True,
+                        "logs": limited_logs,
+                        "total_count": len(filtered_logs),
+                        "log_type": log_type,
+                        "project_filter": project_name
+                    }
+                    
+                except Exception as e:
+                    logger.error("❌ [LOGS] Failed to retrieve logs", error=str(e))
+                    return {"success": False, "error": str(e), "message": "Failed to retrieve logs"}
                     
             else:
                 logger.warning("❓ [COMMAND] Unknown command received", command=command)
@@ -666,6 +726,22 @@ class WebSocketServer:
                 await self.unregister_client(websocket)
 
         return await websockets.serve(handle_client, self.host, self.port)
+
+    async def _focus_window(self):
+        """Focus the DeployBot window"""
+        try:
+            # Send window focus command to frontend
+            await self.broadcast({
+                "type": "system", 
+                "event": "focus_window",
+                "data": {
+                    "action": "focus",
+                    "timestamp": datetime.now().isoformat()
+                }
+            })
+            logger.info("✅ [FOCUS] Window focus request sent to frontend")
+        except Exception as e:
+            logger.error("❌ [FOCUS] Failed to focus window", error=str(e))
 
 # LangGraph implementation functions
 async def detect_deploy(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -752,7 +828,7 @@ async def run_task_selection_test(project_name: str) -> Optional[Dict[str, Any]]
     
     return result_state.get("selected_task")
 
-async def open_application(app_name: str, task_text: str = None) -> bool:
+async def open_application(app_name: str, task_text: Optional[str] = None) -> bool:
     """Open the specified application (macOS)"""
     logger.info("📱 [APP] Opening application", app=app_name, task=task_text)
     
@@ -816,6 +892,19 @@ async def main():
     # Start WebSocket server
     server = await ws_server.start_server()
     logger.info("✅ [MAIN] WebSocket server started successfully")
+    
+    # 🔧 AUTO-START DEPLOY MONITORING
+    logger.info("🚀 [MAIN] Auto-starting deploy monitoring...")
+    try:
+        monitor_success = await deploy_monitor.start_monitoring()
+        if monitor_success:
+            deploybot_state.monitoring_active = True
+            await activity_logger.log_monitoring_started()
+            logger.info("✅ [MAIN] Deploy monitoring auto-started successfully")
+        else:
+            logger.warning("⚠️ [MAIN] Failed to auto-start deploy monitoring")
+    except Exception as e:
+        logger.error("❌ [MAIN] Error auto-starting deploy monitoring", error=str(e))
     
     try:
         # Keep the server running

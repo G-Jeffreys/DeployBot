@@ -19,9 +19,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 import structlog
 
-# OpenAI integration
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
+# OpenAI integration - Updated for modern client
 try:
-    import openai
+    from openai import OpenAI
     OPENAI_AVAILABLE = True
     logger = structlog.get_logger()
     logger.info("✅ [TASKS] OpenAI library available for LLM task selection")
@@ -58,21 +62,24 @@ class TaskSelector:
     def _initialize_openai(self):
         """Initialize OpenAI client with API key"""
         if not OPENAI_AVAILABLE:
+            logger.info("📡 [TASKS] OpenAI library not available - using heuristic fallback only")
             return
         
         # Check for API key in environment
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             logger.warning("⚠️ [TASKS] OPENAI_API_KEY not found in environment - LLM features disabled")
+            logger.info("💡 [TASKS] Add OPENAI_API_KEY to your .env file to enable AI task selection")
             return
         
         try:
-            # Initialize OpenAI client
-            openai.api_key = api_key
-            self.openai_client = openai
+            # Initialize modern OpenAI client
+            self.openai_client = OpenAI(api_key=api_key)
             logger.info("✅ [TASKS] OpenAI client initialized successfully")
+            logger.info("🤖 [TASKS] AI-powered task selection enabled")
         except Exception as e:
             logger.error("❌ [TASKS] Failed to initialize OpenAI client", error=str(e))
+            self.openai_client = None
 
     async def parse_todo_file(self, todo_file_path: Path) -> List[Dict[str, Any]]:
         """Parse TODO.md file and extract tasks with tags and metadata"""
@@ -433,12 +440,23 @@ Respond with ONLY a JSON object:
         return None
 
     async def _call_openai_api(self, prompt: str) -> Dict[str, Any]:
-        """Make API call to OpenAI with proper error handling"""
+        """Make API call to OpenAI with proper error handling - Updated for modern client"""
+        
+        # Safety check: ensure OpenAI client is available
+        if not self.openai_client:
+            logger.error("❌ [TASKS] OpenAI client not available for API call")
+            raise Exception("OpenAI client not initialized")
+        
+        # Type assertion - we know client is not None after the check above
+        client = self.openai_client
         
         try:
+            logger.debug("🤖 [TASKS] Making OpenAI API call...")
+            
+            # Use the modern OpenAI client API
             response = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: self.openai_client.ChatCompletion.create(
+                lambda: client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[{"role": "user", "content": prompt}],
                     max_tokens=200,
@@ -446,14 +464,28 @@ Respond with ONLY a JSON object:
                 )
             )
             
-            content = response.choices[0].message.content.strip()
+            # Safely extract content from response
+            if not response or not response.choices or not response.choices[0]:
+                logger.error("❌ [TASKS] Invalid response structure from OpenAI")
+                raise Exception("Invalid OpenAI response structure")
+            
+            message_content = response.choices[0].message.content
+            if message_content is None:
+                logger.error("❌ [TASKS] Empty content in OpenAI response")
+                raise Exception("Empty content in OpenAI response")
+            
+            content = message_content.strip()
+            logger.debug("✅ [TASKS] OpenAI API response received", content_length=len(content))
             
             # Try to parse as JSON
             try:
-                return json.loads(content)
+                parsed_response = json.loads(content)
+                logger.debug("✅ [TASKS] Response parsed as JSON successfully")
+                return parsed_response
             except json.JSONDecodeError:
                 # If not valid JSON, extract the task name manually
                 logger.warning("⚠️ [TASKS] LLM response not valid JSON, attempting manual parsing")
+                logger.debug("🔍 [TASKS] Raw response content", content=content)
                 return {"selected_task": content, "reasoning": "Manual extraction", "confidence": 0.5}
         
         except Exception as e:

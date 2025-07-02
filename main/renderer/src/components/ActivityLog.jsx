@@ -1,138 +1,302 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 
-const ActivityLog = ({ logs }) => {
-  const logContainerRef = useRef(null)
+// Global activity manager to prevent duplicate event handlers
+let globalActivityManager = null
+let globalActivities = []
+let globalListeners = []
 
-  // Auto-scroll to bottom when new logs are added
+// Generate UUID for unique activity IDs
+function generateUUID() {
+  return 'xxxx-xxxx-4xxx-yxxx-xxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0
+    const v = c === 'x' ? r : (r & 0x3 | 0x8)
+    return v.toString(16)
+  })
+}
+
+function ActivityLog({ project }) {
+  const [activities, setActivities] = useState([])
+  const [isConnected, setIsConnected] = useState(false)
+  const [filter, setFilter] = useState('all')
+
+  console.log('📋 [ACTIVITY_LOG] Component rendering with project:', project?.name)
+
+  // Initialize global activity manager once
   useEffect(() => {
-    if (logContainerRef.current) {
-      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
-    }
-  }, [logs])
-
-  /**
-   * Get log entry styling based on content
-   */
-  const getLogEntryClass = (logEntry) => {
-    const entry = logEntry.toLowerCase()
+    console.log('📋 [ACTIVITY_LOG] Initializing global activity manager...')
     
-    if (entry.includes('error') || entry.includes('failed')) {
-      return 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20'
-    } else if (entry.includes('deploy') || entry.includes('monitoring')) {
-      return 'text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20'
-    } else if (entry.includes('completed') || entry.includes('success')) {
-      return 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20'
-    } else if (entry.includes('project') || entry.includes('opened')) {
-      return 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
+    if (!globalActivityManager) {
+      console.log('📋 [ACTIVITY_LOG] Creating new global activity manager')
+      
+      globalActivityManager = {
+        addActivity: (activity) => {
+          console.log('📋 [ACTIVITY_LOG] Adding global activity:', activity.message)
+          globalActivities = [activity, ...globalActivities.slice(0, 49)] // Keep max 50
+          // Notify all listeners
+          globalListeners.forEach(listener => {
+            try {
+              listener([...globalActivities])
+            } catch (error) {
+              console.error('📋 [ACTIVITY_LOG] Error notifying listener:', error)
+            }
+          })
+        },
+        
+        registerListener: (listener) => {
+          console.log('📋 [ACTIVITY_LOG] Registering new listener')
+          globalListeners.push(listener)
+          // Send current activities to new listener
+          listener([...globalActivities])
+          
+          return () => {
+            console.log('📋 [ACTIVITY_LOG] Unregistering listener')
+            const index = globalListeners.indexOf(listener)
+            if (index > -1) {
+              globalListeners.splice(index, 1)
+            }
+          }
+        },
+        
+        handleBackendUpdate: (data) => {
+          console.log('📋 [ACTIVITY_LOG] Global backend update:', data.type, data.event || data.command)
+          
+          // Skip response events - they're handled by requesting components
+          if (data.type === 'response') {
+            return
+          }
+          
+          // Create activity from backend event
+          let activity = null
+          
+          if (data.type === 'activity' && data.activity) {
+            // Direct activity data
+            activity = {
+              ...data.activity,
+              id: data.activity.id || `activity-${generateUUID()}`
+            }
+          } else if (data.event) {
+            // Convert event to activity
+            activity = {
+              id: `event-${generateUUID()}`,
+              timestamp: data.timestamp || new Date().toISOString(),
+              type: data.type || 'system',
+              message: data.message || `${data.event} event occurred`,
+              data: data.data || {},
+              project: data.data?.project_name || 'Global',
+              event: data.event
+            }
+          }
+          
+          if (activity) {
+            globalActivityManager.addActivity(activity)
+          }
+        }
+      }
+      
+      // Set up WebSocket listener (only once globally)
+      if (window.electronAPI?.onBackendUpdate) {
+        console.log('📋 [ACTIVITY_LOG] Setting up global WebSocket listener')
+        window.electronAPI.onBackendUpdate(globalActivityManager.handleBackendUpdate)
+      }
+      
+      // Add initial activity
+      globalActivityManager.addActivity({
+        id: `startup-${generateUUID()}`,
+        timestamp: new Date().toISOString(),
+        type: 'system',
+        message: 'DeployBot activity monitoring started',
+        data: { component: 'ActivityLog' },
+        project: 'System'
+      })
     }
     
-    return 'text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50'
+    // Register this component as a listener
+    const unregister = globalActivityManager.registerListener(setActivities)
+    
+    return unregister
+  }, []) // Empty dependency array - run only once
+  
+  // Connection status monitoring
+  useEffect(() => {
+    console.log('📋 [ACTIVITY_LOG] Setting up connection monitoring...')
+    
+    const checkConnection = () => {
+      if (window.electronAPI?.pingBackend) {
+        window.electronAPI.pingBackend()
+          .then(() => setIsConnected(true))
+          .catch(() => setIsConnected(false))
+      }
+    }
+    
+    checkConnection()
+    const interval = setInterval(checkConnection, 5000)
+    
+    return () => clearInterval(interval)
+  }, [])
+
+  // Get activity icon based on type and event
+  const getActivityIcon = (activity) => {
+    switch (activity.type) {
+      case 'deploy':
+        switch (activity.event) {
+          case 'detected': return '🚀'
+          case 'started': return '⏳'
+          case 'completed': return '✅'
+          case 'failed': return '❌'
+          default: return '📦'
+        }
+      case 'timer':
+        switch (activity.event) {
+          case 'started': return '⏰'
+          case 'stopped': return '⏹️'
+          case 'completed': return '⏰'
+          default: return '⏱️'
+        }
+      case 'task':
+        switch (activity.event) {
+          case 'selected': return '🎯'
+          case 'suggested': return '💡'
+          case 'opened': return '📱'
+          default: return '📝'
+        }
+      case 'project':
+        switch (activity.event) {
+          case 'created': return '📁'
+          case 'loaded': return '📂'
+          case 'deleted': return '🗑️'
+          default: return '📁'
+        }
+      case 'monitoring':
+        switch (activity.event) {
+          case 'started': return '👁️'
+          case 'stopped': return '💤'
+          default: return '📊'
+        }
+      case 'system':
+        return '⚙️'
+      case 'error':
+        return '❌'
+      case 'warning':
+        return '⚠️'
+      default:
+        return '📋'
+    }
   }
 
-  /**
-   * Extract timestamp from log entry
-   */
-  const extractTimestamp = (logEntry) => {
-    const timestampMatch = logEntry.match(/^\[(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)\]/)
-    return timestampMatch ? timestampMatch[1] : null
+  // Filter activities based on selected filter
+  const filteredActivities = activities.filter(activity => {
+    if (filter === 'all') return true
+    return activity.type === filter
+  })
+
+  // Format timestamp for display
+  const formatTimestamp = (timestamp) => {
+    const date = new Date(timestamp)
+    const now = new Date()
+    const diffMs = now - date
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMins / 60)
+    
+    if (diffMins < 1) return 'Just now'
+    if (diffMins < 60) return `${diffMins}m ago`
+    if (diffHours < 24) return `${diffHours}h ago`
+    return date.toLocaleDateString()
   }
 
-  /**
-   * Get log content without timestamp
-   */
-  const getLogContent = (logEntry) => {
-    const timestampMatch = logEntry.match(/^\[[\d:APM\s]+\]\s*(.+)$/)
-    return timestampMatch ? timestampMatch[1] : logEntry
-  }
+  // Get unique activity types for filter options
+  const availableTypes = [...new Set(activities.map(a => a.type))]
 
-  /**
-   * Clear all logs
-   */
-  const clearLogs = () => {
-    console.log('📋 [ACTIVITY_LOG] Clearing activity logs...')
-    // This would typically call a parent function to clear logs
-    window.electronAPI?.utils.log('info', 'Activity logs cleared')
-  }
+  console.log('📋 [ACTIVITY_LOG] Rendering with', activities.length, 'activities')
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-        <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            📋 Activity Log
-          </h3>
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900">📋 Activity Log</h2>
+        <div className="flex items-center space-x-4">
+          <span className="text-sm text-gray-500">
+            {filteredActivities.length} activities
+          </span>
+          
+          {/* Filter dropdown */}
+          {availableTypes.length > 1 && (
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="text-xs border border-gray-300 rounded px-2 py-1 bg-white"
+            >
+              <option value="all">All Types</option>
+              {availableTypes.map(type => (
+                <option key={type} value={type}>
+                  {type.charAt(0).toUpperCase() + type.slice(1)}
+                </option>
+              ))}
+            </select>
+          )}
+          
           <div className="flex items-center space-x-2">
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              {logs.length} entries
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+            <span className="text-sm text-gray-500">
+              {isConnected ? 'Connected' : 'Disconnected'}
             </span>
-            {logs.length > 0 && (
-              <button
-                onClick={clearLogs}
-                className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-                title="Clear logs"
-              >
-                🗑️
-              </button>
-            )}
           </div>
         </div>
       </div>
-
-      {/* Log Content */}
-      <div 
-        ref={logContainerRef}
-        className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-2"
-      >
-        {logs.length === 0 ? (
-          <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-            <div className="text-4xl mb-2">📝</div>
-            <p>No activity yet</p>
-            <p className="text-sm mt-1">
-              System events will appear here
-            </p>
+      
+      <div className="max-h-96 overflow-y-auto">
+        {filteredActivities.length === 0 ? (
+          <div className="p-6 text-center text-gray-500">
+            <p>No activities yet. Deploy something to see activity!</p>
           </div>
         ) : (
-          logs.map((logEntry, index) => {
-            const timestamp = extractTimestamp(logEntry)
-            const content = getLogContent(logEntry)
-            
-            return (
-              <div
-                key={index}
-                className={`p-2 rounded text-xs font-mono border ${getLogEntryClass(logEntry)}`}
-              >
+          <div className="divide-y divide-gray-100">
+            {filteredActivities.map((activity) => (
+              <div key={activity.id} className="p-4 hover:bg-gray-50 transition-colors">
                 <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    {timestamp && (
-                      <span className="text-gray-500 dark:text-gray-400 mr-2">
-                        {timestamp}
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="text-lg">
+                        {getActivityIcon(activity)}
                       </span>
+                      
+                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                        activity.type === 'deploy' ? 'bg-blue-100 text-blue-800' :
+                        activity.type === 'timer' ? 'bg-yellow-100 text-yellow-800' :
+                        activity.type === 'task' ? 'bg-green-100 text-green-800' :
+                        activity.type === 'system' ? 'bg-gray-100 text-gray-800' :
+                        'bg-purple-100 text-purple-800'
+                      }`}>
+                        {activity.type}
+                      </span>
+                      
+                      {activity.project && activity.project !== 'Global' && (
+                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                          {activity.project}
+                        </span>
+                      )}
+                    </div>
+                    
+                    <p className="mt-1 text-sm text-gray-900">{activity.message}</p>
+                    
+                    {activity.data && Object.keys(activity.data).length > 0 && (
+                      <details className="mt-2">
+                        <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
+                          View details
+                        </summary>
+                        <pre className="mt-1 text-xs text-gray-600 bg-gray-50 p-2 rounded overflow-x-auto">
+                          {JSON.stringify(activity.data, null, 2)}
+                        </pre>
+                      </details>
                     )}
-                    <span className="break-words">
-                      {content}
-                    </span>
+                  </div>
+                  
+                  <div className="text-xs text-gray-500 ml-4 flex-shrink-0">
+                    {formatTimestamp(activity.timestamp)}
                   </div>
                 </div>
               </div>
-            )
-          })
-        )}
-      </div>
-
-      {/* Footer with Connection Status */}
-      <div className="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-gray-500 dark:text-gray-400">
-            Real-time monitoring
-          </span>
-          <div className="flex items-center space-x-1">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="text-green-600 dark:text-green-400">
-              Live
-            </span>
+            ))}
           </div>
-        </div>
+        )}
       </div>
     </div>
   )

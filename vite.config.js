@@ -6,6 +6,7 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   root: 'main/renderer',
+  base: './', // Use relative paths for assets (important for Electron)
   build: {
     outDir: '../../dist',
     emptyOutDir: true,

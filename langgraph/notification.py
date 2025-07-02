@@ -24,8 +24,8 @@ logger = structlog.get_logger()
 # macOS notification support
 try:
     import pync
-    PYNC_AVAILABLE = True
-    logger.info("✅ [NOTIFY] pync library available for macOS notifications")
+    PYNC_AVAILABLE = False  # FORCE osascript fallback due to Apple Silicon architecture issues
+    logger.info("🔧 [NOTIFY] Forcing osascript fallback for Apple Silicon compatibility")
 except ImportError:
     PYNC_AVAILABLE = False
     logger.warning("⚠️ [NOTIFY] pync library not available - using fallback notifications")
@@ -44,8 +44,8 @@ class NotificationManager:
             "system_notifications_enabled": True,
             "in_app_modals_enabled": True,
             "sound_enabled": True,
-            "auto_dismiss_timeout": 30,  # seconds
-            "grace_period": 180,  # 3 minutes before task suggestion
+            "auto_dismiss_timeout": 0,  # DISABLED - notifications should persist until manually dismissed
+            "grace_period": 30,  # 30 seconds before task suggestion
             "notification_persistence": True
         }
         
@@ -216,52 +216,167 @@ class NotificationManager:
         return notification_id
 
     async def _send_system_notification(self, notification: Dict[str, Any]):
-        """Send macOS system notification"""
+        """Send macOS system notification with multiple fallback methods"""
         
-        try:
-            title = notification["title"]
-            message = notification["message"]
-            sound = notification["sound"] if self.preferences["sound_enabled"] else None
-            
-            if PYNC_AVAILABLE:
-                # Use pync for advanced macOS notifications
+        title = notification["title"]
+        message = notification["message"]
+        sound = notification["sound"] if self.preferences["sound_enabled"] else None
+        
+        logger.info("🔔 [NOTIFY] Attempting system notification", 
+                   title=title, message=message)
+        
+        # Method 1: Try pync if available (won't be used due to forced fallback)
+        if PYNC_AVAILABLE:
+            try:
                 pync.notify(
                     message=message,
                     title=title,
                     subtitle="DeployBot",
                     sound=sound,
                     group="deploybot",
-                    activate="com.apple.Terminal",  # Bring Terminal to front when clicked
-                    timeout=self.preferences["auto_dismiss_timeout"]
+                    activate="com.apple.Terminal"
                 )
                 logger.debug("📱 [NOTIFY] macOS notification sent via pync")
-                
-            else:
-                # Fallback to osascript
-                script = f'''
-                display notification "{message}" ¬
-                with title "{title}" ¬
-                subtitle "DeployBot"
-                '''
-                
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: subprocess.run(
-                        ['osascript', '-e', script],
-                        capture_output=True,
-                        text=True,
-                        timeout=10
-                    )
+                return
+            except Exception as e:
+                logger.warning("⚠️ [NOTIFY] pync notification failed, trying fallback", error=str(e))
+        
+        # Method 2: Standard osascript notification
+        try:
+            script = f'''
+            display notification "{message}" ¬
+            with title "{title}" ¬
+            subtitle "DeployBot"
+            '''
+            
+            logger.debug("🔧 [NOTIFY] Executing osascript", script=script.strip())
+            
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ['osascript', '-e', script],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
                 )
-                
-                if result.returncode == 0:
-                    logger.debug("📱 [NOTIFY] macOS notification sent via osascript")
-                else:
-                    logger.warning("⚠️ [NOTIFY] osascript notification failed", 
-                                 error=result.stderr)
-                    
+            )
+            
+            if result.returncode == 0:
+                logger.debug("📱 [NOTIFY] macOS notification sent via osascript")
+                # Test if notification actually appeared
+                await self._verify_notification_display(title, message)
+                return
+            else:
+                logger.warning("⚠️ [NOTIFY] osascript notification failed", 
+                             error=result.stderr, returncode=result.returncode)
         except Exception as e:
-            logger.error("❌ [NOTIFY] Failed to send system notification", error=str(e))
+            logger.error("❌ [NOTIFY] osascript notification failed", error=str(e))
+        
+        # Method 3: Alternative AppleScript approach
+        try:
+            alt_script = f'''
+            tell application "System Events"
+                display notification "{message}" with title "{title}" subtitle "DeployBot"
+            end tell
+            '''
+            
+            logger.debug("🔧 [NOTIFY] Trying alternative AppleScript approach")
+            
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ['osascript', '-e', alt_script],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            )
+            
+            if result.returncode == 0:
+                logger.debug("📱 [NOTIFY] macOS notification sent via System Events")
+                return
+            else:
+                logger.warning("⚠️ [NOTIFY] System Events notification failed", 
+                             error=result.stderr)
+        except Exception as e:
+            logger.error("❌ [NOTIFY] System Events notification failed", error=str(e))
+        
+        # Method 4: Terminal bell + echo (audible fallback)
+        try:
+            logger.info("🔔 [NOTIFY] Using terminal bell fallback")
+            
+            bell_command = f'echo -e "\\a🚀 DeployBot: {title} - {message}"'
+            
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ['bash', '-c', bell_command],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+            )
+            
+            if result.returncode == 0:
+                logger.info("🔔 [NOTIFY] Terminal bell notification sent")
+            else:
+                logger.warning("⚠️ [NOTIFY] Terminal bell failed", error=result.stderr)
+                
+        except Exception as e:
+            logger.error("❌ [NOTIFY] All notification methods failed", error=str(e))
+        
+        # Method 5: Create visible file for manual checking
+        try:
+            desktop_path = os.path.expanduser("~/Desktop/DeployBot_Notification.txt")
+            notification_text = f"""
+🚀 DeployBot Notification
+=========================
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Title: {title}
+Message: {message}
+
+This file was created because system notifications may not be working.
+You can delete this file after reading the notification.
+"""
+            with open(desktop_path, 'w') as f:
+                f.write(notification_text)
+            
+            logger.info("📄 [NOTIFY] Created desktop notification file", path=desktop_path)
+            
+        except Exception as e:
+            logger.error("❌ [NOTIFY] Failed to create desktop notification file", error=str(e))
+
+    async def _verify_notification_display(self, title: str, message: str):
+        """Attempt to verify if notification was actually displayed"""
+        try:
+            # Check if we can detect the notification in the system
+            check_script = '''
+            tell application "System Events"
+                if exists process "NotificationCenter" then
+                    return "NotificationCenter running"
+                else
+                    return "NotificationCenter not found"
+                end if
+            end tell
+            '''
+            
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ['osascript', '-e', check_script],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+            )
+            
+            if result.returncode == 0:
+                logger.debug("🔍 [NOTIFY] Notification verification", result=result.stdout.strip())
+            else:
+                logger.debug("⚠️ [NOTIFY] Could not verify notification display")
+                
+        except Exception as e:
+            logger.debug("❓ [NOTIFY] Notification verification failed", error=str(e))
 
     async def _send_in_app_notification(self, notification: Dict[str, Any]):
         """Send in-app notification via WebSocket"""

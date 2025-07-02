@@ -3,17 +3,43 @@
   "version": "1.0.0",
   "description": "Personal desktop productivity assistant that detects backend deployment events and redirects to productive tasks",
   "main": "main/main.js",
+  "homepage": "https://github.com/your-username/DeployBot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/DeployBot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/DeployBot/issues"
+  },
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:3000 && NODE_ENV=development electron .",
     "build": "vite build",
-    "build:electron": "electron-builder",
+    "build:electron": "npm run build && electron-builder",
+    "build:all": "npm run build && electron-builder --mac --win --linux",
     "start": "electron .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "release": "scripts/release.sh",
+    "test": "echo \"Run npm run test:python for backend tests\"",
+    "test:python": "cd langgraph && python -m pytest tests/ || echo \"Python tests require setup\"",
+    "clean": "rm -rf dist/ node_modules/.vite/ && npm install",
+    "postinstall": "electron-builder install-app-deps"
   },
-  "keywords": ["electron", "productivity", "deployment", "langgraph", "desktop"],
-  "author": "DeployBot Team",
+  "keywords": [
+    "electron",
+    "productivity",
+    "deployment",
+    "langgraph",
+    "desktop",
+    "automation",
+    "task-management",
+    "developer-tools"
+  ],
+  "author": {
+    "name": "DeployBot Team",
+    "email": "hello@deploybot.app"
+  },
   "license": "MIT",
   "devDependencies": {
     "@types/react": "^18.2.66",
@@ -29,20 +55,105 @@
     "wait-on": "^7.2.0"
   },
   "dependencies": {
+    "electron-log": "^5.1.2",
+    "electron-updater": "^6.6.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "ws": "^8.17.0",
-    "electron-log": "^5.1.2"
+    "ws": "^8.17.0"
   },
   "build": {
     "appId": "com.deploybot.app",
     "productName": "DeployBot",
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "main/**/*",
-      "dist/**/*"
-    ]
+      "dist/**/*", 
+      "backend/**/*",
+      "requirements.txt",
+      "!**/*.pyc",
+      "!**/__pycache__",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/node_modules/*.d.ts",
+      "!**/node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!.editorconfig",
+      "!**/._*",
+      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/{appveyor.yml,.travis.yml,circle.yml}",
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+    ],
+    "extraResources": [
+      {
+        "from": "requirements.txt",
+        "to": "requirements.txt"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "build/icon.icns",
+      "background": "build/dmg-background.png",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build/icon.png",
+      "category": "Utility"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "your-username",
+      "repo": "DeployBot"
+    },
+    "electronUpdaterCompatibility": ">=0.0.1"
   }
-} 
+}

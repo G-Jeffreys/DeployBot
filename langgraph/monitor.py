@@ -156,11 +156,43 @@ class DeployMonitor:
         
         logger.info("🚀 [DEPLOY_MONITOR] Starting deploy monitoring...")
         
+        # Add global deploy log monitoring as fallback
+        await self._add_global_log_monitoring()
+        
         self.monitoring_active = True
         self.monitor_task = asyncio.create_task(self._monitoring_loop())
         
         logger.info("✅ [DEPLOY_MONITOR] Deploy monitoring started successfully")
         return True
+
+    async def _add_global_log_monitoring(self):
+        """Add monitoring for the global deploy log as a fallback"""
+        global_log_dir = Path.home() / ".deploybot"
+        global_log = global_log_dir / "deploy_log.txt"
+        
+        # Ensure global log exists
+        global_log_dir.mkdir(exist_ok=True)
+        if not global_log.exists():
+            global_log.touch()
+        
+        # Add global monitoring entry
+        self.monitored_projects["_global"] = {
+            "name": "_global",
+            "path": str(global_log_dir),
+            "config": {"type": "global_fallback"},
+            "deploy_log": str(global_log),
+            "last_deploy_time": None,
+            "deploy_count": 0
+        }
+        
+        # Initialize position tracking
+        if global_log.exists():
+            self.last_known_positions[str(global_log)] = global_log.stat().st_size
+        else:
+            self.last_known_positions[str(global_log)] = 0
+            
+        logger.info("🌐 [DEPLOY_MONITOR] Added global log monitoring", 
+                   global_log=str(global_log))
 
     async def stop_monitoring(self) -> bool:
         """Stop the deploy monitoring loop"""

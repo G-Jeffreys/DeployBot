@@ -27,22 +27,137 @@ contextBridge.exposeInMainWorld('electronAPI', {
   project: {
     create: (projectData) => {
       console.log('📁 [PRELOAD] Creating project:', projectData);
-      return ipcRenderer.invoke('project-action', 'create', projectData);
+      return ipcRenderer.invoke('python-command', 'project-create', projectData);
     },
     
-    open: (projectPath) => {
-      console.log('📁 [PRELOAD] Opening project:', projectPath);
-      return ipcRenderer.invoke('project-action', 'open', { path: projectPath });
+    open: (projectData) => {
+      console.log('📁 [PRELOAD] Opening project:', projectData);
+      return ipcRenderer.invoke('python-command', 'project-load', { path: projectData.path });
     },
     
-    delete: (projectPath) => {
-      console.log('📁 [PRELOAD] Deleting project:', projectPath);
-      return ipcRenderer.invoke('project-action', 'delete', { path: projectPath });
+    delete: (projectData) => {
+      console.log('📁 [PRELOAD] Deleting project:', projectData);
+      return ipcRenderer.invoke('python-command', 'project-delete', { path: projectData.path, name: projectData.name });
     },
     
     list: () => {
       console.log('📁 [PRELOAD] Listing projects');
-      return ipcRenderer.invoke('project-action', 'list', {});
+      return ipcRenderer.invoke('python-command', 'project-list', {});
+    },
+  },
+
+  // Task management - NEW
+  tasks: {
+    getSuggestions: (projectPath, context = {}) => {
+      console.log('🎯 [PRELOAD] Getting task suggestions:', projectPath);
+      return ipcRenderer.invoke('python-command', 'get-task-suggestions', { project_path: projectPath, context });
+    },
+    
+    redirectToTask: (task, context = {}) => {
+      console.log('🔀 [PRELOAD] Redirecting to task:', task);
+      return ipcRenderer.invoke('python-command', 'redirect-to-task', { task, context });
+    },
+    
+    testSelection: (projectName) => {
+      console.log('🧪 [PRELOAD] Testing task selection:', projectName);
+      return ipcRenderer.invoke('python-command', 'test-task-selection', { projectName });
+    },
+  },
+
+  // Deploy monitoring - NEW
+  monitoring: {
+    start: () => {
+      console.log('🚀 [PRELOAD] Starting deploy monitoring');
+      return ipcRenderer.invoke('python-command', 'start-monitoring', {});
+    },
+    
+    stop: () => {
+      console.log('🛑 [PRELOAD] Stopping deploy monitoring');
+      return ipcRenderer.invoke('python-command', 'stop-monitoring', {});
+    },
+    
+    status: () => {
+      console.log('📊 [PRELOAD] Checking monitoring status');
+      return ipcRenderer.invoke('python-command', 'check-monitor', {});
+    },
+    
+    simulateDeploy: (projectName, command = 'test deploy') => {
+      console.log('🧪 [PRELOAD] Simulating deploy event:', projectName, command);
+      return ipcRenderer.invoke('python-command', 'simulate-deploy', { project_name: projectName, command });
+    },
+  },
+
+  // Timer management - NEW  
+  timer: {
+    start: (projectName, durationSeconds = 1800, deployCommand = null) => {
+      console.log('⏰ [PRELOAD] Starting timer:', projectName, durationSeconds);
+      return ipcRenderer.invoke('python-command', 'timer-start', { 
+        project_name: projectName, 
+        duration_seconds: durationSeconds,
+        deploy_command: deployCommand 
+      });
+    },
+    
+    stop: (projectName) => {
+      console.log('⏹️ [PRELOAD] Stopping timer:', projectName);
+      return ipcRenderer.invoke('python-command', 'timer-stop', { project_name: projectName });
+    },
+    
+    status: (projectName) => {
+      console.log('📊 [PRELOAD] Getting timer status:', projectName);
+      return ipcRenderer.invoke('python-command', 'timer-status', { project_name: projectName });
+    },
+  },
+
+  // Deploy wrapper management - NEW
+  wrapper: {
+    status: () => {
+      console.log('🔧 [PRELOAD] Checking wrapper status');
+      return ipcRenderer.invoke('python-command', 'wrapper-status', {});
+    },
+    
+    install: () => {
+      console.log('📥 [PRELOAD] Installing deploy wrapper');
+      return ipcRenderer.invoke('python-command', 'wrapper-install', {});
+    },
+    
+    uninstall: () => {
+      console.log('🗑️ [PRELOAD] Uninstalling deploy wrapper');
+      return ipcRenderer.invoke('python-command', 'wrapper-uninstall', {});
+    },
+  },
+
+  // Testing utilities - NEW
+  testing: {
+    week3Workflow: (projectName) => {
+      console.log('🧪 [PRELOAD] Testing Week 3 workflow:', projectName);
+      return ipcRenderer.invoke('python-command', 'test-week3-workflow', { project_name: projectName });
+    },
+    
+    pythonBackend: () => {
+      console.log('🐍 [PRELOAD] Testing Python backend');
+      return ipcRenderer.invoke('python-command', 'ping', {});
+    },
+  },
+
+  // Window management - NEW
+  window: {
+    focus: () => {
+      console.log('🔍 [PRELOAD] Requesting window focus');
+      return ipcRenderer.invoke('window-focus');
+    },
+  },
+
+  // Real-time WebSocket events - NEW
+  events: {
+    onBackendUpdate: (callback) => {
+      console.log('📡 [PRELOAD] Registering backend update listener');
+      ipcRenderer.on('backend-update', (_event, data) => callback(data));
+    },
+    
+    removeBackendUpdateListener: (callback) => {
+      console.log('📡 [PRELOAD] Removing backend update listener');
+      ipcRenderer.removeListener('backend-update', callback);
     },
   },
 
@@ -74,15 +189,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
-  // Deploy monitoring
+  // Deploy monitoring - KEPT FOR BACKWARD COMPATIBILITY
   deploy: {
     startMonitoring: () => {
-      console.log('🚀 [PRELOAD] Starting deploy monitoring');
+      console.log('🚀 [PRELOAD] Starting deploy monitoring (legacy)');
       return ipcRenderer.invoke('python-command', 'start-monitoring', {});
     },
     
     stopMonitoring: () => {
-      console.log('🛑 [PRELOAD] Stopping deploy monitoring');
+      console.log('🛑 [PRELOAD] Stopping deploy monitoring (legacy)');
       return ipcRenderer.invoke('python-command', 'stop-monitoring', {});
     },
   },
@@ -91,6 +206,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 // Remove any existing listeners to prevent memory leaks
 ipcRenderer.removeAllListeners('python-output');
 ipcRenderer.removeAllListeners('python-error');
+ipcRenderer.removeAllListeners('backend-update');
 
 console.log('✅ [PRELOAD] Context bridge setup complete - electronAPI exposed to renderer');
 

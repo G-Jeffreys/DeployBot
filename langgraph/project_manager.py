@@ -516,7 +516,7 @@ class ProjectManager:
             ]),
             "settings": {
                 "defaultTimer": project_data.get("defaultTimer", 1800),
-                "graceperiod": 180,
+                "graceperiod": 30,
                 "autoRedirect": True,
                 "excludeTags": ["#backend"],
                 "preferredTags": ["#short", "#solo"]

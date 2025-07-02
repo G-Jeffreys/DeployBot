@@ -1,42 +1,8 @@
 import React, { useState, useEffect } from 'react'
 
-const DeployStatus = ({ status }) => {
-  const [timeRemaining, setTimeRemaining] = useState(null)
-  const [progress, setProgress] = useState(0)
-
-  // Simulate timer countdown when deploying
-  useEffect(() => {
-    let interval = null
-    
-    if (status === 'deploying') {
-      console.log('🚀 [DEPLOY_STATUS] Starting deploy timer simulation...')
-      const startTime = Date.now()
-      const duration = 5000 // 5 seconds for demo
-      
-      interval = setInterval(() => {
-        const elapsed = Date.now() - startTime
-        const remaining = Math.max(0, duration - elapsed)
-        const progressPercent = Math.min(100, (elapsed / duration) * 100)
-        
-        setTimeRemaining(Math.ceil(remaining / 1000))
-        setProgress(progressPercent)
-        
-        if (remaining <= 0) {
-          console.log('✅ [DEPLOY_STATUS] Deploy timer completed')
-          clearInterval(interval)
-        }
-      }, 100)
-    } else {
-      setTimeRemaining(null)
-      setProgress(0)
-    }
-
-    return () => {
-      if (interval) {
-        clearInterval(interval)
-      }
-    }
-  }, [status])
+const DeployStatus = ({ status, timerData }) => {
+  // Remove mock timer simulation - we'll use real timer data from props
+  console.log('🚀 [DEPLOY_STATUS] Rendering with status:', status, 'timerData:', timerData)
 
   /**
    * Get status display information
@@ -92,20 +58,20 @@ const DeployStatus = ({ status }) => {
           {statusInfo.text}
         </span>
         
-        {/* Timer and Progress for Deploying Status */}
-        {status === 'deploying' && (
+        {/* Timer and Progress for Active Deployments */}
+        {(status === 'deploying' || timerData?.isActive) && timerData && (
           <div className="mt-1">
-            {timeRemaining !== null && (
-              <div className="text-xs text-gray-600 dark:text-gray-300">
-                {timeRemaining}s remaining
-              </div>
-            )}
+            <div className="text-xs text-gray-600 dark:text-gray-300">
+              ⏰ {timerData.timeRemaining || 'Timer active'}
+            </div>
             
             {/* Progress Bar */}
-            <div className="w-24 h-1 bg-gray-200 dark:bg-gray-600 rounded-full mt-1">
+            <div className="w-32 h-1 bg-gray-200 dark:bg-gray-600 rounded-full mt-1">
               <div 
-                className="h-1 bg-yellow-500 rounded-full transition-all duration-200"
-                style={{ width: `${progress}%` }}
+                className={`h-1 rounded-full transition-all duration-500 ${
+                  timerData.remainingSeconds > 300 ? 'bg-green-500' : 'bg-yellow-500'
+                }`}
+                style={{ width: `${Math.max(0, Math.min(100, timerData.progressPercentage || 0))}%` }}
               />
             </div>
           </div>

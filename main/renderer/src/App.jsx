@@ -6,100 +6,84 @@ import TaskList from './components/TaskList'
 import DeployStatus from './components/DeployStatus'
 import ActivityLog from './components/ActivityLog'
 import TestPythonConnection from './components/TestPythonConnection'
+import TimerDisplay from './components/TimerDisplay'
 
 function App() {
   // Application state
   const [selectedProject, setSelectedProject] = useState(null)
-  const [pythonStatus, setPythonStatus] = useState('connecting')
-  const [deployStatus, setDeployStatus] = useState('idle')
-  const [logs, setLogs] = useState([])
+  const [deployStatus, setDeployStatus] = useState(null)
+  const [isBackendConnected, setIsBackendConnected] = useState(false)
+  const [backendStatus, setBackendStatus] = useState('connecting')
+  const [lastActivity, setLastActivity] = useState(null)
+  const [timerData, setTimerData] = useState(null)
 
-  // Log application initialization
+  // Set up backend connection monitoring
   useEffect(() => {
-    console.log('🎉 [APP] DeployBot App component initializing...')
-    window.electronAPI?.utils.log('info', 'App component mounted')
+    console.log('🚀 [APP] Setting up backend connection monitoring...')
     
-    initializeApp()
-    setupPythonListeners()
+    // Test backend connection on startup
+    testBackendConnection()
     
+    // Set up periodic connection checks
+    const connectionInterval = setInterval(() => {
+      if (backendStatus === 'disconnected' || backendStatus === 'failed') {
+        testBackendConnection()
+      }
+    }, 10000) // Check every 10 seconds if disconnected
+    
+    // Cleanup on unmount
     return () => {
-      console.log('🔴 [APP] App component cleaning up...')
-      window.electronAPI?.utils.log('info', 'App component unmounting')
+      console.log('🧹 [APP] Cleaning up backend connection monitoring...')
+      clearInterval(connectionInterval)
     }
-  }, [])
+  }, [backendStatus])
+
+  // Event handlers are now managed globally by ActivityLog component
+  // App component focuses on connection management and routing
 
   /**
-   * Initialize the application and load initial data
+   * Test backend connection
    */
-  const initializeApp = async () => {
-    console.log('🚀 [APP] Initializing DeployBot application...')
+  const testBackendConnection = async () => {
+    console.log('🔍 [APP] Testing backend connection...')
+    setBackendStatus('connecting')
     
     try {
-      // Test Python connection
-      const pythonResponse = await window.electronAPI?.python.sendCommand('ping', {})
-      console.log('🐍 [APP] Python connection test:', pythonResponse)
-      setPythonStatus('connected')
+      // Wait a moment for backend to be ready if this is initial startup
+      console.log('🔍 [APP] Waiting for backend to initialize...')
+      await new Promise(resolve => setTimeout(resolve, 2000))
       
-      // Load available projects
-      const projectsResponse = await window.electronAPI?.project.list()
-      console.log('📁 [APP] Available projects:', projectsResponse)
+      const response = await window.electronAPI?.testing.pythonBackend()
+      console.log('🔍 [APP] Backend test response:', JSON.stringify(response, null, 2))
       
-      // Load recent logs
-      const logsResponse = await window.electronAPI?.logs.get('recent')
-      console.log('📋 [APP] Recent logs:', logsResponse)
-      if (logsResponse?.logs) {
-        setLogs(logsResponse.logs)
+      // Handle WebSocket response structure - data is nested under response.data
+      const data = response?.data || response
+      
+      if (data && data.success) {
+        setIsBackendConnected(true)
+        setBackendStatus('connected')
+        console.log('✅ [APP] Backend connection test successful')
+        console.log('✅ [APP] Backend is now connected and ready')
+      } else {
+        console.warn('⚠️ [APP] Backend test response was not successful:', data)
+        throw new Error(data?.message || data?.error || response?.message || response?.error || 'Backend test failed')
       }
-      
-      console.log('✅ [APP] Application initialization complete')
     } catch (error) {
-      console.error('❌ [APP] Application initialization failed:', error)
-      setPythonStatus('error')
-    }
-  }
-
-  /**
-   * Setup listeners for Python backend communication
-   */
-  const setupPythonListeners = () => {
-    console.log('📡 [APP] Setting up Python communication listeners...')
-    
-    // Listen for Python output
-    window.electronAPI?.python.onOutput((output) => {
-      console.log('🐍 [APP] Python output received:', output)
-      window.electronAPI?.utils.log('info', 'Python output', output)
+      console.error('❌ [APP] Backend connection test failed:', error)
+      console.error('❌ [APP] Error details:', JSON.stringify(error, null, 2))
+      setIsBackendConnected(false)
       
-      // Update application state based on Python output
-      if (output.includes('DEPLOY_DETECTED')) {
-        setDeployStatus('deploying')
-        addLog('Deploy detected - starting timer')
-      } else if (output.includes('TASK_SELECTED')) {
-        addLog('Alternative task selected')
-      } else if (output.includes('REDIRECT_COMPLETE')) {
-        addLog('Successfully redirected to task')
+      // Set appropriate status based on error type
+      if (error.message?.includes('WebSocket not connected') || error.message?.includes('connection')) {
+        setBackendStatus('connecting')
+        console.log('🔄 [APP] Will retry backend connection in 3 seconds...')
+        setTimeout(() => {
+          testBackendConnection()
+        }, 3000)
+      } else {
+      setBackendStatus('error')
       }
-    })
-    
-    // Listen for Python errors
-    window.electronAPI?.python.onError((error) => {
-      console.error('🐍 [APP] Python error received:', error)
-      window.electronAPI?.utils.log('error', 'Python error', error)
-      setPythonStatus('error')
-      addLog(`Python error: ${error}`)
-    })
-    
-    console.log('✅ [APP] Python listeners setup complete')
-  }
-
-  /**
-   * Add a new log entry to the activity log
-   */
-  const addLog = (message) => {
-    const timestamp = new Date().toLocaleTimeString()
-    const logEntry = `[${timestamp}] ${message}`
-    console.log(`📋 [APP] Adding log: ${logEntry}`)
-    
-    setLogs(prevLogs => [logEntry, ...prevLogs.slice(0, 9)]) // Keep last 10 logs
+    }
   }
 
   /**
@@ -107,128 +91,235 @@ function App() {
    */
   const handleProjectSelect = async (project) => {
     console.log('📁 [APP] Project selected:', project)
-    window.electronAPI?.utils.log('info', 'Project selected', project)
-    
     setSelectedProject(project)
-    addLog(`Opened project: ${project?.name || 'Unknown'}`)
     
-    // Start deploy monitoring for this project
+    // Clear deploy status when switching projects
+    setDeployStatus(null)
+    
     if (project) {
-      try {
-        await window.electronAPI?.deploy.startMonitoring()
-        console.log('🚀 [APP] Deploy monitoring started for project:', project.name)
-        addLog('Deploy monitoring started')
-      } catch (error) {
-        console.error('❌ [APP] Failed to start deploy monitoring:', error)
-        addLog('Failed to start deploy monitoring')
-      }
+      window.electronAPI?.utils.log('info', 'Project selected in UI', { 
+        name: project.name, 
+        path: project.path 
+      })
     }
   }
 
   /**
-   * Handle deploy detection test
+   * Get connection status display info
    */
-  const handleTestDeploy = () => {
-    console.log('🧪 [APP] Testing deploy detection...')
-    window.electronAPI?.utils.log('info', 'Testing deploy detection')
-    
-    setDeployStatus('deploying')
-    addLog('Simulating deploy detection...')
-    
-    // Simulate deploy process
-    setTimeout(() => {
-      setDeployStatus('completed')
-      addLog('Deploy simulation completed')
-      
-      setTimeout(() => {
-        setDeployStatus('idle')
-      }, 3000)
-    }, 5000)
+  const getConnectionStatus = () => {
+    switch (backendStatus) {
+      case 'connected':
+        return { icon: '✅', text: 'Connected', color: 'text-green-600' }
+      case 'connecting':
+        return { icon: '🔄', text: 'Connecting...', color: 'text-yellow-600' }
+      case 'disconnected':
+        return { icon: '🔴', text: 'Disconnected', color: 'text-red-600' }
+      case 'error':
+        return { icon: '❌', text: 'Error', color: 'text-red-600' }
+      case 'failed':
+        return { icon: '💥', text: 'Failed', color: 'text-red-600' }
+      default:
+        return { icon: '❓', text: 'Unknown', color: 'text-gray-600' }
+    }
   }
 
+  const connectionStatus = getConnectionStatus()
+
   return (
-    <div className="min-h-screen bg-deploybot-light dark:bg-deploybot-dark">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      <header className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700">
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <h1 className="text-2xl font-bold text-deploybot-primary">
-                🤖 DeployBot
-              </h1>
-              <div className={`status-${pythonStatus === 'connected' ? 'online' : 'offline'}`}>
-                {pythonStatus === 'connected' ? '🟢 Connected' : '🔴 Disconnected'}
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            {/* Logo */}
+            <div className="flex items-center space-x-3">
+              <div className="text-2xl">🤖</div>
+              <div>
+                <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+                  DeployBot
+                </h1>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Deploy Detection & Task Redirection
+                </p>
               </div>
             </div>
-            
+
+            {/* Status Indicators */}
             <div className="flex items-center space-x-4">
-              <DeployStatus status={deployStatus} />
-              <button
-                onClick={handleTestDeploy}
-                className="btn-outline"
-                disabled={deployStatus === 'deploying'}
-              >
-                🧪 Test Deploy
-              </button>
+              {/* Backend Connection Status */}
+              <div className={`flex items-center space-x-2 text-sm ${connectionStatus.color}`}>
+                <span className="text-lg">{connectionStatus.icon}</span>
+                <span className="hidden sm:inline">Backend: {connectionStatus.text}</span>
+              </div>
+              
+              {/* Selected Project */}
+              {selectedProject && (
+                <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
+                  <span>📁</span>
+                  <span className="hidden sm:inline">
+                    {selectedProject.name}
+                  </span>
+                </div>
+              )}
+              
+              {/* Deploy Status Indicator */}
+              {deployStatus?.isActive && (
+                <div className="flex items-center space-x-2 text-sm text-blue-600 dark:text-blue-400">
+                  <span className="animate-pulse">🚀</span>
+                  <span className="hidden sm:inline">Deploy Active</span>
+                </div>
+              )}
+              
+              {/* Timer Status in Header - Prominent Display */}
+              {timerData?.isActive && (
+                <div className="flex items-center space-x-2 text-sm text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1 rounded-full">
+                  <span className="animate-pulse">⏰</span>
+                  <span className="font-bold">{timerData.timeRemaining}</span>
+                  <span className="hidden sm:inline text-xs">remaining</span>
+                </div>
+              )}
+              
+              {/* Last Activity */}
+              {lastActivity && (
+                <div className="text-xs text-gray-500 dark:text-gray-400 max-w-xs truncate">
+                  Last: {lastActivity.message}
+                </div>
+              )}
             </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <div className="flex h-screen pt-16">
-        {/* Sidebar */}
-        <aside className="w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 overflow-y-auto scrollbar-thin">
-          <div className="p-6">
-            <ProjectSelector 
-              selectedProject={selectedProject}
-              onProjectSelect={handleProjectSelect}
-            />
-          </div>
-        </aside>
-
-        {/* Main Panel */}
-        <main className="flex-1 overflow-y-auto scrollbar-thin">
-          <div className="p-6">
-            {selectedProject ? (
-              <div className="space-y-6">
-                {/* Project Header */}
-                <div className="card">
-                  <div className="card-header">
-                    <h2 className="text-xl font-semibold">
-                      📁 {selectedProject.name}
-                    </h2>
-                    <p className="text-gray-600 dark:text-gray-400 mt-1">
-                      {selectedProject.path}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Task List */}
-                <TaskList project={selectedProject} />
-
-                {/* Python Connection Test */}
-                <TestPythonConnection />
-              </div>
-            ) : (
-              <div className="text-center py-12">
-                <div className="text-6xl mb-4">📂</div>
-                <h2 className="text-2xl font-semibold text-gray-600 dark:text-gray-400 mb-2">
-                  No Project Selected
-                </h2>
-                <p className="text-gray-500 dark:text-gray-500">
-                  Select or create a project from the sidebar to get started
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Backend Connection Warning */}
+        {!isBackendConnected && (
+          <div className="mb-6 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+            <div className="flex items-center space-x-3">
+              <span className="text-yellow-600 dark:text-yellow-400 text-lg">⚠️</span>
+              <div>
+                <h3 className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                  Backend Connection Issue
+                </h3>
+                <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
+                  The Python backend is not connected. Some features may not work properly.
                 </p>
+                <button
+                  onClick={testBackendConnection}
+                  className="mt-2 text-sm bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded"
+                >
+                  🔄 Retry Connection
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Main Grid Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left Column - Project Selection */}
+          <div className="lg:col-span-1">
+            <div className="card sticky top-8">
+              <div className="card-body">
+                <ProjectSelector
+                  selectedProject={selectedProject}
+                  onProjectSelect={handleProjectSelect}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Middle Column - Timer, Deploy Status and Tasks */}
+          <div className="lg:col-span-1 space-y-6">
+            {/* Prominent Timer Display */}
+            <TimerDisplay 
+              selectedProject={selectedProject}
+              onTimerUpdate={setTimerData}
+            />
+
+            {/* Deploy Status */}
+            <DeployStatus
+              status={
+                deployStatus?.isActive 
+                  ? 'deploying'
+                  : deployStatus?.event === 'completed' 
+                    ? 'completed'
+                    : deployStatus?.event === 'failed'
+                      ? 'error'
+                      : 'idle'
+              }
+              timerData={timerData}
+            />
+
+            {/* Task List */}
+            <div className="card">
+              <div className="card-header">
+                <h3 className="text-lg font-semibold">📝 Tasks</h3>
+              </div>
+              <div className="card-body">
+                {(() => {
+                  try {
+                    console.log('🔍 [APP] Rendering TaskList component with project:', selectedProject?.name || 'none')
+                    return <TaskList project={selectedProject} />
+                  } catch (error) {
+                    console.error('❌ [APP] TaskList component error:', error)
+                    return (
+                      <div className="text-center py-8">
+                        <div className="text-4xl mb-2">❌</div>
+                        <p className="text-red-600 dark:text-red-400">Error loading tasks</p>
+                        <p className="text-sm text-gray-500 mt-1">{error.message}</p>
+                      </div>
+                    )
+                  }
+                })()}
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column - Activity Log and Connection Test */}
+          <div className="lg:col-span-1 space-y-6">
+            {/* Activity Log */}
+            <ActivityLog
+              project={selectedProject}
+            />
+
+            {/* Backend Connection Test (Development) */}
+            {window.electronAPI?.utils.isDevelopment() && (
+              <div className="card">
+                <div className="card-header">
+                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                    🔧 Development Tools
+                  </h3>
+                </div>
+                <div className="card-body">
+                  <TestPythonConnection />
+                </div>
               </div>
             )}
           </div>
-        </main>
+        </div>
+      </main>
 
-        {/* Activity Log Panel */}
-        <aside className="w-80 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700">
-          <ActivityLog logs={logs} />
-        </aside>
-      </div>
+      {/* Footer */}
+      <footer className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between text-sm text-gray-500 dark:text-gray-400">
+            <div>
+              DeployBot v1.0.0 - Week 4 Implementation
+            </div>
+            <div className="flex items-center space-x-4">
+              <span>Backend: {connectionStatus.text}</span>
+              {selectedProject && (
+                <span>Project: {selectedProject.name}</span>
+              )}
+              <span>
+                {new Date().toLocaleTimeString()}
+              </span>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }

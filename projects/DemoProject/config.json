@@ -18,7 +18,7 @@
   ],
   "settings": {
     "defaultTimer": 1800,
-    "graceperiod": 180,
+    "graceperiod": 30,
     "autoRedirect": true,
     "excludeTags": ["#backend"],
     "preferredTags": ["#short", "#solo"]
