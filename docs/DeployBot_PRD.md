@@ -86,7 +86,7 @@
 DeployBot/
 ├── main/                      ← Electron app
 │   └── renderer/              ← React or simple HTML/JS UI
-├── langgraph/                 ← Python agents (LangGraph)
+├── backend/                 ← Python agents (LangGraph)
 │   ├── graph.py, tasks.py, timer.py, state.py
 ├── bridge/                    ← IPC or socket communication
 ├── projects/

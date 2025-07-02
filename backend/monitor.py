@@ -250,14 +250,33 @@ class DeployMonitor:
             current_size = deploy_log.stat().st_size
             last_position = self.last_known_positions.get(deploy_log_path, 0)
             
+            # DEBUG: Add detailed logging for file monitoring
+            logger.debug("🔍 [DEPLOY_MONITOR] Checking project for changes", 
+                        project_name=project_name,
+                        deploy_log_path=deploy_log_path,
+                        current_size=current_size,
+                        last_position=last_position,
+                        size_changed=current_size > last_position)
+            
             if current_size <= last_position:
                 # No new content
                 return
+            
+            logger.info("📈 [DEPLOY_MONITOR] File size change detected", 
+                       project_name=project_name,
+                       current_size=current_size,
+                       last_position=last_position,
+                       new_bytes=current_size - last_position)
             
             # Read new content
             with open(deploy_log, 'r', encoding='utf-8') as f:
                 f.seek(last_position)
                 new_content = f.read()
+            
+            logger.info("📝 [DEPLOY_MONITOR] Read new content", 
+                       project_name=project_name,
+                       content_length=len(new_content),
+                       content_preview=repr(new_content[:100] + "..." if len(new_content) > 100 else new_content))
             
             # Update position
             self.last_known_positions[deploy_log_path] = current_size
@@ -265,13 +284,28 @@ class DeployMonitor:
             # Parse new deploy events
             new_events = self._parse_deploy_events(new_content, project_name)
             
+            logger.info("🔍 [DEPLOY_MONITOR] Parsed events", 
+                       project_name=project_name,
+                       event_count=len(new_events),
+                       events=[{
+                           "type": event.get("type"),
+                           "command": event.get("command"),
+                           "timestamp": event.get("timestamp")
+                       } for event in new_events])
+            
             # Process each new event
             for event in new_events:
+                logger.info("🚀 [DEPLOY_MONITOR] Processing event", 
+                           project_name=project_name,
+                           event_type=event.get("type"),
+                           command=event.get("command"))
                 await self._handle_deploy_event(event, project_info)
                 
         except Exception as e:
             logger.error("❌ [DEPLOY_MONITOR] Error checking project deploys", 
                         project_name=project_name, error=str(e))
+            import traceback
+            logger.error("❌ [DEPLOY_MONITOR] Full traceback", traceback=traceback.format_exc())
 
     def _parse_deploy_events(self, content: str, project_name: str) -> List[Dict[str, Any]]:
         """Parse deploy events from log content"""
@@ -361,10 +395,16 @@ class DeployMonitor:
         project_name = event["project_name"]
         event_type = event["type"]
         
+        # 🎯 Use actual CWD from deploy command instead of default project path
+        actual_project_path = event.get("cwd") or project_info["path"]
+        
         logger.info("🚀 [DEPLOY_MONITOR] Deploy event detected", 
                    project_name=project_name, 
                    event_type=event_type,
                    command=event.get("command", "Unknown"),
+                   actual_cwd=actual_project_path,
+                   default_path=project_info["path"],
+                   using_cwd=event.get("cwd") is not None,
                    timestamp=event["datetime"].isoformat())
         
         # Update project statistics
@@ -372,35 +412,65 @@ class DeployMonitor:
             project_info["last_deploy_time"] = event["datetime"].isoformat()
             project_info["deploy_count"] += 1
         
+        # DEBUG: Log callback status
+        logger.info("🔧 [DEPLOY_MONITOR] Callback status check", 
+                   project_name=project_name,
+                   event_type=event_type,
+                   deploy_detected_callback_set=self.deploy_detected_callback is not None,
+                   deploy_completed_callback_set=self.deploy_completed_callback is not None,
+                   generic_callback_count=len(self.event_callbacks))
+        
         # Call specific callbacks based on event type
         try:
             if event_type == "deploy_start" and self.deploy_detected_callback:
+                logger.info("📞 [DEPLOY_MONITOR] Calling deploy_detected_callback", 
+                           project_name=project_name,
+                           command=event.get("command", ""),
+                           project_path=actual_project_path)
                 await self.deploy_detected_callback(
                     project_name,
                     event.get("command", ""),
-                    project_info["path"]
+                    actual_project_path  # 🎯 Use actual CWD instead of default path
                 )
+                logger.info("✅ [DEPLOY_MONITOR] deploy_detected_callback completed successfully")
             elif event_type == "deploy_complete" and self.deploy_completed_callback:
+                logger.info("📞 [DEPLOY_MONITOR] Calling deploy_completed_callback", 
+                           project_name=project_name,
+                           command=event.get("command", ""),
+                           exit_code=event.get("exit_code", 0),
+                           project_path=actual_project_path)
                 await self.deploy_completed_callback(
                     project_name,
                     event.get("command", ""),
                     event.get("exit_code", 0),
-                    project_info["path"]
+                    actual_project_path  # 🎯 Use actual CWD instead of default path
                 )
+                logger.info("✅ [DEPLOY_MONITOR] deploy_completed_callback completed successfully")
         except Exception as e:
             logger.error("❌ [DEPLOY_MONITOR] Error calling specific callback", 
                         event_type=event_type, error=str(e))
+            import traceback
+            logger.error("❌ [DEPLOY_MONITOR] Callback traceback", traceback=traceback.format_exc())
         
         # Notify all registered generic callbacks
-        for callback in self.event_callbacks:
+        logger.info("📢 [DEPLOY_MONITOR] Notifying generic callbacks", 
+                   callback_count=len(self.event_callbacks))
+        
+        for i, callback in enumerate(self.event_callbacks):
             try:
+                logger.info(f"📞 [DEPLOY_MONITOR] Calling generic callback {i+1}/{len(self.event_callbacks)}")
                 if asyncio.iscoroutinefunction(callback):
                     await callback(event, project_info)
                 else:
                     callback(event, project_info)
+                logger.info(f"✅ [DEPLOY_MONITOR] Generic callback {i+1} completed successfully")
             except Exception as e:
                 logger.error("❌ [DEPLOY_MONITOR] Error in event callback", 
-                           project_name=project_name, error=str(e))
+                           callback_index=i,
+                           project_name=project_name, 
+                           error=str(e))
+                import traceback
+                logger.error("❌ [DEPLOY_MONITOR] Generic callback traceback", traceback=traceback.format_exc())
 
     def get_monitoring_status(self) -> Dict[str, Any]:
         """Get the current monitoring status"""

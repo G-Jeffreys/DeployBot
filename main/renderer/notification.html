@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeployBot Notification</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      min-height: 100%;
+      background: transparent;
+      overflow: visible;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    }
+
+    #notification-root {
+      width: 100%;
+      min-height: 100%;
+      background: transparent;
+    }
+
+    /* Loading styles */
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      color: #666;
+      font-size: 14px;
+    }
+
+    /* Basic notification styles that will be enhanced by React/Tailwind */
+    .notification-window {
+      width: 100%;
+      min-height: 100%;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+      padding: 16px;
+      position: relative;
+      overflow: visible;
+    }
+
+    .notification-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .notification-title {
+      font-weight: 600;
+      font-size: 14px;
+      color: #333;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .notification-close {
+      background: none;
+      border: none;
+      font-size: 18px;
+      color: #999;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .notification-close:hover {
+      background: rgba(0, 0, 0, 0.1);
+      color: #666;
+    }
+
+    .notification-content {
+      font-size: 13px;
+      color: #555;
+      line-height: 1.4;
+      margin-bottom: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .notification-actions {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+      max-height: 80px;
+      overflow-y: auto;
+      align-items: flex-start;
+    }
+
+    .notification-btn {
+      padding: 2px 8px;
+      border: none;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .notification-btn-primary {
+      background: #6366f1;
+      color: white;
+    }
+
+    .notification-btn-primary:hover {
+      background: #5856eb;
+    }
+
+    .notification-btn-secondary {
+      background: #6b7280;
+      color: white;
+    }
+
+    .notification-btn-secondary:hover {
+      background: #555d6b;
+    }
+
+    .notification-btn-success {
+      background: #10b981;
+      color: white;
+    }
+
+    .notification-btn-success:hover {
+      background: #059669;
+    }
+
+    .notification-btn-gray {
+      background: #6b7280;
+      color: white;
+    }
+
+    .notification-btn-gray:hover {
+      background: #555d6b;
+    }
+
+    /* Notification color themes */
+    .notification-blue {
+      border: 2px solid #3b82f6;
+      background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+    }
+
+    .notification-purple {
+      border: 2px solid #8b5cf6;
+      background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+    }
+
+    .notification-orange {
+      border: 2px solid #f59e0b;
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    }
+
+    .notification-green {
+      border: 2px solid #10b981;
+      background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+    }
+
+    .notification-indigo {
+      border: 2px solid #6366f1;
+      background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+    }
+
+    .notification-gray {
+      border: 2px solid #6b7280;
+      background: linear-gradient(135deg, #f9fafb 0%, #e5e7eb 100%);
+    }
+
+    /* Animation classes */
+    .notification-enter {
+      opacity: 0;
+      transform: translateX(100%);
+    }
+
+    .notification-enter-active {
+      opacity: 1;
+      transform: translateX(0);
+      transition: all 0.3s ease-out;
+    }
+
+    .notification-exit {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .notification-exit-active {
+      opacity: 0;
+      transform: translateX(100%);
+      transition: all 0.3s ease-out;
+    }
+  </style>
+</head>
+<body>
+  <div id="notification-root">
+    <div class="loading">
+      Loading notification...
+    </div>
+  </div>
+
+  <script>
+    // Basic notification functionality for when React isn't available
+    console.log('🔔 [NOTIFICATION] Notification window loaded');
+    
+    let notificationData = null;
+    
+    // Listen for notification data from main process
+    if (window.electronAPI && window.electronAPI.ipcRenderer) {
+      window.electronAPI.ipcRenderer.on('notification-data', (event, data) => {
+        console.log('🔔 [NOTIFICATION] Received notification data:', data);
+        notificationData = data;
+        renderNotification(data);
+      });
+    }
+
+    // Fallback rendering function if React fails to load
+    function renderNotification(notification) {
+      const root = document.getElementById('notification-root');
+      
+      if (!notification) {
+        root.innerHTML = '<div class="loading">No notification data</div>';
+        return;
+      }
+
+      const icon = getNotificationIcon(notification.data?.type);
+      const color = getNotificationColor(notification.data?.type);
+
+      root.innerHTML = `
+        <div class="notification-window ${color}" onclick="handleNotificationClick()">
+          <div class="notification-header">
+            <div class="notification-title">
+              <span>${icon}</span>
+              <span>${notification.title || 'Notification'}</span>
+            </div>
+            <button class="notification-close" onclick="handleDismiss(event)">×</button>
+          </div>
+          
+          <div class="notification-content">
+            ${formatNotificationMessage(notification)}
+          </div>
+          
+          <div class="notification-actions">
+            ${generateActionButtons(notification)}
+          </div>
+        </div>
+      `;
+      
+      // Trigger entrance animation
+      setTimeout(() => {
+        const window = root.querySelector('.notification-window');
+        if (window) {
+          window.classList.add('notification-enter-active');
+        }
+      }, 100);
+    }
+
+    function getNotificationIcon(type) {
+      switch (type) {
+        case 'deploy_detected': return '🚀';
+        case 'task_suggestion': return '🎯';
+        case 'timer_expiry': return '⏰';
+        case 'deploy_completed': return '✅';
+        case 'unified_suggestion': return '🎯⏰';
+        default: return '🔔';
+      }
+    }
+
+    function getNotificationColor(type) {
+      switch (type) {
+        case 'deploy_detected': return 'notification-blue';
+        case 'task_suggestion': return 'notification-purple';
+        case 'timer_expiry': return 'notification-orange';
+        case 'deploy_completed': return 'notification-green';
+        case 'unified_suggestion': return 'notification-indigo';
+        default: return 'notification-gray';
+      }
+    }
+
+    function formatNotificationMessage(notification) {
+      // Handle unified suggestion notification
+      if (notification.data?.type === 'unified_suggestion') {
+        const { timer_info, task, project_name } = notification.data;
+        let content = '';
+        
+                 // Timer status
+         if (timer_info) {
+           const timerText = timer_info.status === 'expired' 
+             ? `Timer expired for ${project_name}`
+             : timer_info.status === 'running'
+             ? `Timer: ${timer_info.time_remaining_formatted || 'running'} left`
+             : `Timer ${timer_info.status}`;
+           
+           content += `
+             <div style="margin-bottom: 6px; padding: 6px; background: rgba(255,255,255,0.6); border-radius: 4px;">
+               <div style="font-size: 11px;">
+                 <span style="color: #ea580c;">⏰</span>
+                 <strong>${timerText}</strong>
+               </div>
+             </div>
+           `;
+         }
+        
+                 // Task suggestion
+         if (task) {
+           content += `
+             <div style="margin-bottom: 6px; padding: 6px; background: rgba(255,255,255,0.6); border-radius: 4px;">
+               <div style="font-size: 11px; margin-bottom: 3px;">
+                 <span style="color: #7c3aed;">🎯</span>
+                 <strong>Suggested Task:</strong>
+               </div>
+               <div style="margin-bottom: 3px; font-size: 11px; line-height: 1.2;">
+                 <strong>${task.text}</strong>
+               </div>
+               <div style="font-size: 10px; color: #666;">
+                 📱 ${task.app || 'Unknown App'} • 
+                 ⏱️ ~${task.estimated_duration || 45}min
+                 ${task.tags ? ' • 🏷️ ' + task.tags.slice(0, 2).join(' ') : ''}
+               </div>
+             </div>
+           `;
+         }
+        
+        return content || notification.message || 'Notification';
+      }
+      
+      // Handle task suggestion notification
+      if (notification.data?.type === 'task_suggestion' && notification.data?.task) {
+        const task = notification.data.task;
+        return `
+          <div style="margin-bottom: 8px;">
+            <strong>${task.text}</strong>
+          </div>
+          <div style="font-size: 11px; color: #666;">
+            📱 ${task.app || 'Unknown App'} • 
+            ⏱️ ~${task.estimated_duration || 45}min
+            ${task.tags ? ' • 🏷️ ' + task.tags.slice(0, 2).join(' ') : ''}
+          </div>
+        `;
+      }
+      return notification.message || 'Notification';
+    }
+
+    function generateActionButtons(notification) {
+      const type = notification.data?.type;
+      
+      // Unified suggestion actions
+      if (type === 'unified_suggestion') {
+        const { task, timer_info } = notification.data;
+        let buttons = '';
+        
+        // Task-related actions
+        if (task) {
+          buttons += `
+            <button class="notification-btn notification-btn-primary" onclick="handleAction('switch_to_task', event)">
+              Switch to Task
+            </button>
+          `;
+        }
+        
+                 // Timer-related actions
+         buttons += `
+           <button class="notification-btn notification-btn-secondary" onclick="handleAction('view_timer', event)">
+             Timer
+           </button>
+           <button class="notification-btn notification-btn-success" onclick="handleAction('start_new_timer', event)">
+             New
+           </button>
+         `;
+        
+        // General actions
+        buttons += `
+          <button class="notification-btn notification-btn-gray" onclick="handleAction('snooze', event)">
+            Snooze 5min
+          </button>
+        `;
+        
+        return buttons;
+      }
+      
+      if (type === 'task_suggestion') {
+        return `
+          <button class="notification-btn notification-btn-primary" onclick="handleAction('switch_now', event)">
+            Switch Now
+          </button>
+          <button class="notification-btn notification-btn-secondary" onclick="handleAction('snooze_5min', event)">
+            Snooze 5min
+          </button>
+        `;
+      }
+      
+      if (type === 'deploy_detected') {
+        return `
+          <button class="notification-btn notification-btn-primary" onclick="handleAction('view_timer', event)">
+            View Timer
+          </button>
+        `;
+      }
+      
+      return '';
+    }
+
+    // Action handlers
+    async function handleAction(action, event) {
+      if (event) {
+        event.stopPropagation();
+      }
+      
+      console.log('🔔 [NOTIFICATION] Action triggered:', action);
+      
+      try {
+        let data = {};
+        
+        // Prepare action-specific data
+        if (action === 'switch_now' || action === 'switch_to_task') {
+          data = { task: notificationData.data?.task };
+        } else if (action === 'start_new_timer') {
+          data = { duration: 1800 }; // Default 30 minutes
+        } else if (action === 'snooze') {
+          data = { snooze_minutes: 5 };
+        }
+        
+        if (window.electronAPI && window.electronAPI.notificationAction) {
+          await window.electronAPI.notificationAction(notificationData.id, action, data);
+        }
+        
+        // Close window after action (except for snooze actions)
+        if (!action.includes('snooze')) {
+          window.close();
+        }
+      } catch (error) {
+        console.error('❌ [NOTIFICATION] Action failed:', error);
+        window.close();
+      }
+    }
+
+    function handleDismiss(event) {
+      if (event) {
+        event.stopPropagation();
+      }
+      handleAction('dismiss');
+    }
+
+    function handleNotificationClick() {
+      if (notificationData?.data?.type === 'task_suggestion') {
+        handleAction('switch_now');
+      } else {
+        handleAction('click');
+      }
+    }
+
+    // Auto-dismiss after 10 seconds
+    setTimeout(() => {
+      console.log('🔔 [NOTIFICATION] Auto-dismissing notification');
+      handleDismiss();
+    }, 10000);
+  </script>
+</body>
+</html> 

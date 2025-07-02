@@ -67,8 +67,8 @@ Original scaffolding documentation suggested starting with simple `child_process
 - **Feature Requirements**: Deploy monitoring requires continuous communication, not just request-response
 
 ### ✅ Implementation
-- Created `bridge/websocket_bridge.js` for Electron-side WebSocket client
-- Implemented WebSocket server in `langgraph/graph.py` with structured message handling
+- Created `main/process_manager.js` for Electron-side WebSocket client
+- Implemented WebSocket server in `backend/graph.py` with structured message handling
 - Added reconnection logic and message queuing for reliability
 - Exposed WebSocket methods through `preload.js` context bridge
 - Built React components with real-time WebSocket integration
@@ -101,8 +101,8 @@ DeployBot/
 │   ├── main.js             ← Main process
 │   ├── preload.js          ← Security bridge
 │   └── renderer/           ← React UI
-├── bridge/                 ← IPC communication layer
-├── langgraph/             ← Python backend
+├── main/process_manager.js ← WebSocket communication layer
+├── backend/               ← Python backend (LangGraph)
 └── projects/              ← User data
 ```
 
@@ -194,10 +194,10 @@ Week 2 scaffold documentation outlined gradual implementation of deploy wrapper,
 Refactor to use **single WebSocket bridge implementation** instead of maintaining duplicate WebSocket handling code.
 
 ### 📝 Context
-During Week 2 implementation, discovered two separate WebSocket implementations: inline code in `main/main.js` (~100 lines) and a dedicated `bridge/websocket_bridge.js` class (~300 lines). The bridge was unused dead code.
+During Week 2 implementation, WebSocket communication was consolidated into `main/process_manager.js` for clean separation of concerns and reliable message handling between Electron and Python backend.
 
 ### 🤔 Rationale
-- **Code Duplication**: Two implementations performing identical functionality violates DRY principles
+- **Code Consolidation**: Communication layer consolidated into ProcessManager for clean architecture
 - **Maintainability**: Single source of truth for WebSocket communication
 - **Feature Completeness**: Bridge implementation has superior error handling, reconnection logic, and message queuing
 - **Architecture Cleanliness**: Separation of concerns - main.js should focus on Electron, bridge handles WebSocket
@@ -210,19 +210,19 @@ webSocketClient = new WebSocket(wsUrl);
 webSocketClient.on('open', () => { /* inline handling */ });
 // + 100 lines of WebSocket management code
 
-// bridge/websocket_bridge.js - Unused dead code
+// bridge/websocket_bridge.js - Unused dead code (now deleted)
 class WebSocketBridge { /* sophisticated implementation */ }
 ```
 
-**After Refactor:**
+**Final Implementation:**
 ```javascript
 // main/main.js - Clean Electron focus
-const WebSocketBridge = require('../bridge/websocket_bridge');
-wsBridge = new WebSocketBridge('ws://localhost:8765');
-wsBridge.on('connected', () => { /* clean event handling */ });
+// Communication handled by main/process_manager.js
+processManager = new ProcessManager();
+processManager.on('connected', () => { /* clean event handling */ });
 
-// bridge/websocket_bridge.js - Single source of truth
-class WebSocketBridge { /* now actively used */ }
+// main/process_manager.js - WebSocket communication layer
+class ProcessManager { /* production implementation */ }
 ```
 
 **Improvements Gained:**
@@ -318,7 +318,7 @@ async def handle_client(websocket, path):
 - All other components work independently
 
 ### 📋 Resolution Required
-1. Fix WebSocket handler function signature in `langgraph/graph.py`
+1. Fix WebSocket handler function signature in `backend/graph.py`
 2. Test end-to-end command processing
 3. Update WebSocket integration tests
 4. Verify reconnection behavior with stable connection

@@ -85,6 +85,151 @@ const TestPythonConnection = () => {
   }
 
   /**
+   * Test unified notification system
+   */
+  const testUnifiedNotification = async () => {
+    console.log('🔔 [TEST] Testing unified notification system...')
+    
+    try {
+      setIsRunning(true)
+      
+      // Create a test unified notification
+      const testNotification = {
+        id: `test_unified_notification_${Date.now()}`,
+        title: '🎯⏰ Task & Timer Update',
+        message: 'This is a test of the unified notification system',
+        data: {
+          type: 'unified_suggestion',
+          project_name: 'TestProject',
+          timer_info: {
+            status: 'running',
+            time_remaining_formatted: '22:15',
+            duration_seconds: 1800
+          },
+          task: {
+            text: 'Write documentation for unified notifications',
+            app: 'Bear',
+            tags: ['#writing', '#docs'],
+            estimated_duration: 25
+          },
+          context: {
+            deploy_active: true,
+            timer_duration: 1800
+          },
+          has_timer: true,
+          has_task: true
+        },
+        actions: ['Switch to Task', 'Start New Timer', 'View Timer', 'Snooze', 'Dismiss'],
+        timestamp: new Date().toISOString()
+      }
+      
+      // Show the unified notification
+      const response = await window.electronAPI?.notifications.show(testNotification)
+      console.log('🔔 [TEST] Unified notification response:', response)
+      
+      const result = {
+        name: 'Unified Notification Test',
+        command: 'show-unified-notification',
+        data: testNotification,
+        success: response?.success === true,
+        response,
+        timestamp: new Date().toLocaleTimeString()
+      }
+
+      setTestResults(prev => [...prev, result])
+      
+      if (!response?.success) {
+        throw new Error(response?.error || 'Failed to show unified notification')
+      }
+      
+    } catch (error) {
+      console.error('❌ [TEST] Unified notification test failed:', error)
+      
+      const result = {
+        name: 'Unified Notification Test',
+        command: 'show-unified-notification',
+        data: {},
+        success: false,
+        error: error.message,
+        timestamp: new Date().toLocaleTimeString()
+      }
+
+      setTestResults(prev => [...prev, result])
+    } finally {
+      setIsRunning(false)
+    }
+  }
+
+  /**
+   * Test custom notification system
+   */
+  const testCustomNotification = async () => {
+    console.log('🔔 [TEST] Testing custom notification system...')
+    
+    try {
+      setIsRunning(true)
+      
+      // Create a test notification
+      const testNotification = {
+        id: `test_notification_${Date.now()}`,
+        title: '🎯 Test Task Suggestion',
+        message: 'This is a test of the custom notification system',
+        data: {
+          type: 'task_suggestion',
+          project_name: 'TestProject',
+          task: {
+            text: 'Write documentation for custom notifications',
+            app: 'Bear',
+            tags: ['#writing', '#docs'],
+            estimated_duration: 30
+          },
+          context: {
+            deploy_active: true,
+            timer_duration: 1800
+          }
+        },
+        actions: ['Switch Now', 'Snooze 5min', 'Dismiss'],
+        timestamp: new Date().toISOString()
+      }
+      
+      // Show the custom notification
+      const response = await window.electronAPI?.notifications.show(testNotification)
+      console.log('🔔 [TEST] Custom notification response:', response)
+      
+      const result = {
+        name: 'Custom Notification Test',
+        command: 'show-notification',
+        data: testNotification,
+        success: response?.success === true,
+        response,
+        timestamp: new Date().toLocaleTimeString()
+      }
+
+      setTestResults(prev => [...prev, result])
+      
+      if (!response?.success) {
+        throw new Error(response?.error || 'Failed to show notification')
+      }
+      
+    } catch (error) {
+      console.error('❌ [TEST] Custom notification test failed:', error)
+      
+      const result = {
+        name: 'Custom Notification Test',
+        command: 'show-notification',
+        data: {},
+        success: false,
+        error: error.message,
+        timestamp: new Date().toLocaleTimeString()
+      }
+
+      setTestResults(prev => [...prev, result])
+    } finally {
+      setIsRunning(false)
+    }
+  }
+
+  /**
    * Test individual command
    */
   const testCommand = async (command, data = {}) => {
@@ -186,6 +331,20 @@ const TestPythonConnection = () => {
               disabled={isRunning}
             >
               🛑 Stop Monitor
+            </button>
+            <button
+              onClick={testCustomNotification}
+              className="btn-outline text-xs"
+              disabled={isRunning}
+            >
+              🔔 Test Notification
+            </button>
+            <button
+              onClick={testUnifiedNotification}
+              className="btn-outline text-xs"
+              disabled={isRunning}
+            >
+              🎯⏰ Test Unified
             </button>
           </div>
         </div>

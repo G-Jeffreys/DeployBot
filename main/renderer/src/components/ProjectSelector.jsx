@@ -7,17 +7,24 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  // Load projects when backend becomes connected
+  // Load projects when backend becomes connected - FIXED infinite loop
   useEffect(() => {
     console.log('📁 [PROJECT_SELECTOR] Component initializing...', { isBackendConnected, backendStatus })
     
+    // Only load on meaningful status changes, not every minor fluctuation
     if (isBackendConnected && backendStatus === 'connected') {
       console.log('📁 [PROJECT_SELECTOR] Backend is connected, loading projects...')
-      loadProjects()
+      
+      // Debounce project loading to prevent rapid successive calls
+      const loadTimeout = setTimeout(() => {
+        loadProjects()
+      }, 500) // Wait 500ms for status to stabilize
+      
+      return () => clearTimeout(loadTimeout)
     } else {
       console.log('📁 [PROJECT_SELECTOR] Waiting for backend connection...', { isBackendConnected, backendStatus })
     }
-  }, [isBackendConnected, backendStatus]) // Load projects when connection status changes
+  }, [isBackendConnected, backendStatus]) // Fixed: Use separate dependencies
 
   /**
    * Load projects from backend
@@ -384,7 +391,9 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
                     
                     {/* Project metadata */}
                     <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {project.task_count ? (
+                      {project.taskCount ? (
+                        <span>{project.taskCount} tasks</span>
+                      ) : project.task_count ? (
                         <span>{project.task_count} tasks</span>
                       ) : project.tasks ? (
                         <span>{project.tasks.length} tasks</span>

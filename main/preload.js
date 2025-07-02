@@ -200,6 +200,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.log('🛑 [PRELOAD] Stopping deploy monitoring (legacy)');
       return ipcRenderer.invoke('python-command', 'stop-monitoring', {});
     },
+    
+    status: (projectPath) => {
+      console.log('📊 [PRELOAD] Checking deploy status for project:', projectPath);
+      return ipcRenderer.invoke('python-command', 'check-monitor', {});
+    },
+  },
+
+  // Custom notifications - NEW
+  notifications: {
+    show: (notification) => {
+      console.log('🔔 [PRELOAD] Showing custom notification:', notification);
+      return ipcRenderer.invoke('show-notification', notification);
+    },
+    
+    action: (notificationId, action, data = {}) => {
+      console.log('🔔 [PRELOAD] Notification action:', { notificationId, action, data });
+      return ipcRenderer.invoke('notification-action', notificationId, action, data);
+    },
+  },
+
+  // For notification windows specifically
+  notificationAction: (notificationId, action, data = {}) => {
+    console.log('🔔 [PRELOAD] Direct notification action:', { notificationId, action, data });
+    return ipcRenderer.invoke('notification-action', notificationId, action, data);
+  },
+
+  // IPC Renderer for notification windows
+  ipcRenderer: {
+    on: (channel, callback) => {
+      console.log('📡 [PRELOAD] Registering IPC listener:', channel);
+      ipcRenderer.on(channel, callback);
+    },
+    
+    removeListener: (channel, callback) => {
+      console.log('📡 [PRELOAD] Removing IPC listener:', channel);
+      ipcRenderer.removeListener(channel, callback);
+    },
   },
 });
 

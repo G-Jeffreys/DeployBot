@@ -118,22 +118,13 @@ function ActivityLog({ project }) {
     return unregister
   }, []) // Empty dependency array - run only once
   
-  // Connection status monitoring
+  // Connection status monitoring - REMOVED: Let App.jsx handle connection monitoring
+  // to prevent redundant checks that cause project list refreshing
   useEffect(() => {
-    console.log('📋 [ACTIVITY_LOG] Setting up connection monitoring...')
+    console.log('📋 [ACTIVITY_LOG] Skipping redundant connection monitoring - App.jsx handles this')
     
-    const checkConnection = () => {
-      if (window.electronAPI?.pingBackend) {
-        window.electronAPI.pingBackend()
-          .then(() => setIsConnected(true))
-          .catch(() => setIsConnected(false))
-      }
-    }
-    
-    checkConnection()
-    const interval = setInterval(checkConnection, 5000)
-    
-    return () => clearInterval(interval)
+    // Just set initial connected state without polling
+    setIsConnected(true) // Assume connected until we know otherwise
   }, [])
 
   // Get activity icon based on type and event

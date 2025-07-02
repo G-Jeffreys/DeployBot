@@ -114,12 +114,23 @@ class WebSocketServer:
         timer_duration = 1800  # 30 minutes
         await deploy_timer.start_timer(project_name, timer_duration, deploy_command)
         
-        # Week 3: Send immediate deploy detected notification
-        await notification_manager.notify_deploy_detected(project_name, deploy_command, timer_duration)
+        # Week 3: Check if tasks are available to decide notification strategy
+        grace_period = notification_manager.preferences["grace_period"]  # 0 seconds now (immediate)
         
-        # Week 3: Schedule task suggestion after grace period
-        grace_period = notification_manager.preferences["grace_period"]  # 30 seconds now
-        asyncio.create_task(self._schedule_task_suggestion(project_name, project_path, deploy_command, grace_period))
+        # Quick check for task availability
+        tasks_available = await self._check_tasks_available(project_path)
+        
+        if tasks_available:
+            # Tasks available → Only send unified notification after grace period
+            logger.info("🎯 [DEPLOY] Tasks available - scheduling unified notification only", 
+                       grace_period=grace_period)
+            asyncio.create_task(self._schedule_unified_notification(
+                project_name, project_path, deploy_command, grace_period, timer_duration
+            ))
+        else:
+            # No tasks → Send immediate timer notification as fallback
+            logger.info("⏰ [DEPLOY] No tasks available - sending timer notification immediately")
+            await notification_manager.notify_deploy_detected(project_name, deploy_command, timer_duration)
         
         # Notify frontend
         await self.broadcast({
@@ -130,13 +141,46 @@ class WebSocketServer:
                 "command": deploy_command,
                 "timer_duration": timer_duration,
                 "grace_period": grace_period,
+                "has_tasks": tasks_available,
                 "timestamp": datetime.now().isoformat()
             }
         })
     
-    async def _schedule_task_suggestion(self, project_name: str, project_path: str, deploy_command: str, grace_period: int):
-        """Schedule task suggestion after grace period - Week 3 workflow"""
-        logger.info("⏰ [WORKFLOW] Scheduling task suggestion", 
+    async def _check_tasks_available(self, project_path: str) -> bool:
+        """Quick check if tasks are available for this project"""
+        try:
+            # Load tasks from TODO.md using the global task_selector
+            todo_file = Path(project_path) / "TODO.md"
+            if not todo_file.exists():
+                logger.info("📋 [DEPLOY] No TODO.md file found", file_path=str(todo_file))
+                return False
+            
+            logger.info("📋 [DEPLOY] Checking tasks in TODO.md", file_path=str(todo_file))
+            
+            # Use the global task_selector instance (same as unified notification workflow)
+            available_tasks = await task_selector.parse_todo_file(todo_file)
+            
+            # Filter to pending tasks only
+            pending_tasks = [task for task in available_tasks if not task['completed']]
+            
+            logger.info("📋 [DEPLOY] Task availability check", 
+                        total_tasks=len(available_tasks),
+                        pending_tasks=len(pending_tasks),
+                        file_exists=todo_file.exists(),
+                        file_size=todo_file.stat().st_size if todo_file.exists() else 0)
+            
+            return len(pending_tasks) > 0
+            
+        except Exception as e:
+            logger.error("❌ [DEPLOY] Failed to check task availability", error=str(e), file_path=str(project_path))
+            import traceback
+            logger.error("❌ [DEPLOY] Full traceback", traceback=traceback.format_exc())
+            return False
+
+    async def _schedule_unified_notification(self, project_name: str, project_path: str, 
+                                          deploy_command: str, grace_period: int, timer_duration: int):
+        """Schedule unified notification with timer + task info after grace period"""
+        logger.info("🎯⏰ [WORKFLOW] Scheduling unified notification", 
                    project=project_name, grace_period=grace_period)
         
         # Wait for grace period
@@ -144,12 +188,15 @@ class WebSocketServer:
         
         # Check if deploy is still active
         if not deploybot_state.deploy_detected or deploybot_state.current_project != project_name:
-            logger.info("🚫 [WORKFLOW] Deploy completed before task suggestion - cancelling")
+            logger.info("🚫 [WORKFLOW] Deploy completed before unified notification - cancelling")
             return
         
-        # *** BRING DEPLOYBOT TO FOCUS AGAIN FOR TASK SUGGESTION ***
-        logger.info("🔍 [WORKFLOW] Bringing DeployBot window to focus for task suggestion")
+        # *** BRING DEPLOYBOT TO FOCUS AGAIN FOR UNIFIED NOTIFICATION ***
+        logger.info("🔍 [WORKFLOW] Bringing DeployBot window to focus for unified notification")
         await self._focus_window()
+        
+        # Get timer status
+        timer_status = deploy_timer.get_timer_status(project_name)
         
         # Week 3: Select best alternative task
         context = {
@@ -157,7 +204,7 @@ class WebSocketServer:
             "project_path": project_path,
             "deploy_command": deploy_command,
             "deploy_active": True,
-            "timer_duration": 1800,
+            "timer_duration": timer_duration,
             "use_llm": True
         }
         
@@ -177,32 +224,47 @@ class WebSocketServer:
                     project_path
                 )
                 
-                # Week 3: Send task suggestion notification
-                notification_id = await notification_manager.notify_task_suggestion(
-                    project_name, selected_task, context
+                # Send unified notification with both timer and task info
+                notification_id = await notification_manager.notify_unified_suggestion(
+                    project_name, 
+                    timer_info=timer_status,
+                    task=selected_task, 
+                    context=context
                 )
                 
                 # Notify frontend
                 await self.broadcast({
                     "type": "task",
-                    "event": "task_suggested",
+                    "event": "unified_suggested",
                     "data": {
                         "project": project_name,
                         "task": selected_task,
+                        "timer_info": timer_status,
                         "context": context,
                         "notification_id": notification_id,
                         "timestamp": datetime.now().isoformat()
                     }
                 })
                 
-                logger.info("✅ [WORKFLOW] Task suggestion completed", 
+                logger.info("✅ [WORKFLOW] Unified notification sent successfully", 
                            task=selected_task['text'], app=selected_task.get('app'))
                 
             else:
-                logger.warning("⚠️ [WORKFLOW] No suitable tasks found for suggestion")
+                # No tasks found - send timer notification as fallback
+                logger.warning("⚠️ [WORKFLOW] No suitable tasks found - sending timer notification fallback")
+                await notification_manager.notify_deploy_detected(project_name, deploy_command, timer_duration)
                 
         except Exception as e:
-            logger.error("❌ [WORKFLOW] Error in task suggestion workflow", error=str(e))
+            logger.error("❌ [WORKFLOW] Error in unified notification workflow", error=str(e))
+            # Fallback to timer notification on error
+            await notification_manager.notify_deploy_detected(project_name, deploy_command, timer_duration)
+
+    async def _schedule_task_suggestion(self, project_name: str, project_path: str, deploy_command: str, grace_period: int):
+        """DEPRECATED: Schedule task suggestion after grace period - replaced by unified notifications"""
+        logger.warning("⚠️ [WORKFLOW] Using deprecated task suggestion method - should use unified notifications")
+        
+        # Forward to unified notification for backward compatibility
+        await self._schedule_unified_notification(project_name, project_path, deploy_command, grace_period, 1800)
 
     async def on_deploy_completed(self, project_name: str, deploy_command: str, exit_code: int, project_path: str):
         """Called when a deploy completes"""
@@ -385,6 +447,33 @@ class WebSocketServer:
                     "monitored_projects": status["monitored_projects"],
                     "last_check": datetime.now().isoformat()
                 }
+                
+            elif command == "direct-add-to-monitoring":
+                project_name = data.get("project_name")
+                project_path = data.get("project_path")
+                
+                if project_name and project_path:
+                    logger.info("🔧 [DIRECT] Adding project directly to monitoring", 
+                               project_name=project_name, project_path=project_path)
+                    
+                    success = await deploy_monitor.add_project(project_name, project_path)
+                    
+                    if success:
+                        deploybot_state.current_project = project_name
+                        logger.info("✅ [DIRECT] Project added to monitoring successfully", 
+                                   project_name=project_name)
+                        return {
+                            "success": True, 
+                            "message": f"Project '{project_name}' added to monitoring",
+                            "project_name": project_name,
+                            "project_path": project_path
+                        }
+                    else:
+                        logger.error("❌ [DIRECT] Failed to add project to monitoring", 
+                                    project_name=project_name)
+                        return {"success": False, "message": f"Failed to add project '{project_name}' to monitoring"}
+                else:
+                    return {"success": False, "message": "Project name and path required"}
                 
             # Project Management Commands
             elif command == "project-create":

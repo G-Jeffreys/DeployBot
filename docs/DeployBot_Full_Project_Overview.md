@@ -8,20 +8,20 @@ DeployBot is a personal desktop productivity assistant built to detect backend d
 
 **Main Components:**
 - **Electron App (JS/React):** Desktop UI, task display, notifications, config management.
-- **LangGraph Backend (Python):** Manages deploy detection, task selection.
-- **IPC Bridge:** Communicates between Electron and LangGraph (WebSocket or child process).
+- **LangGraph Backend (Python):** Manages deploy detection, task selection via WebSocket server.
+- **ProcessManager:** Handles communication between Electron and LangGraph backend.
 - **Filesystem-based Project State:** Project folders with task lists, configs, logs.
 
 ```
 DeployBot/
 ├── main/                      ← Electron app (UI)
 │   └── renderer/              ← Task list, logs, backend services
-├── langgraph/                 ← Python AI logic
-│   ├── graph.py               ← LangGraph graph
+├── backend/                   ← Python AI logic (LangGraph)
+│   ├── graph.py               ← LangGraph workflow & WebSocket server
 │   ├── tasks.py               ← Task selection logic
 │   ├── monitor.py             ← Deploy detection
 │   ├── notify.py, timer.py    ← Supporting modules
-├── bridge/                    ← IPC communication layer
+├── main/process_manager.js    ← WebSocket communication with Python backend
 ├── projects/
 │   └── MyProject/
 │       ├── TODO.md

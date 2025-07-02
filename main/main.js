@@ -1,8 +1,7 @@
 const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
 const log = require('electron-log');
-const WebSocket = require('ws');
+const ProcessManager = require('./process_manager');
 
 // Configure logging
 log.transports.file.level = 'debug';
@@ -10,24 +9,28 @@ log.transports.console.level = 'debug';
 
 // Global variables for process management
 let mainWindow;
-let pythonProcess;
-let wsConnection;
-let connectionAttempts = 0;
-const maxConnectionAttempts = 10;
-// Better development mode detection
-let isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+let processManager;
+// Better development mode detection - only true if explicitly in development OR Vite server is running
+let isDev = process.env.NODE_ENV === 'development' && process.argv.includes('--dev');
+
+// Custom notification system
+let notificationWindows = new Map(); // notification_id -> BrowserWindow
+let notificationQueue = [];
+let maxNotifications = 3;
+let notificationSpacing = 10; // pixels between notifications
 
 /**
- * Create the main application window with WebSocket communication setup
+ * Create the main application window with robust process management
  */
 function createWindow() {
   console.log('🚀 [MAIN] Creating DeployBot main window...');
   log.info('Creating main application window');
-  
-  // Very early debug file
-  const fs = require('fs');
-  const debugPath1 = path.join(require('os').tmpdir(), 'deploybot-debug.txt');
-  fs.writeFileSync(debugPath1, `createWindow started at ${new Date().toISOString()}\n`, { flag: 'a' });
+
+  // Initialize process manager
+  if (!processManager) {
+    processManager = new ProcessManager();
+    setupProcessManagerEventHandlers();
+  }
 
   // Create the browser window
   mainWindow = new BrowserWindow({
@@ -48,7 +51,8 @@ function createWindow() {
 
   // Load the renderer
   if (isDev) {
-    console.log('📱 [MAIN] Loading development server at http://localhost:3000');
+    console.log('📱 [MAIN] Loading React app from Vite development server');
+    // Load from Vite dev server in development
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools();
   } else {
@@ -63,74 +67,29 @@ function createWindow() {
     mainWindow.show();
   });
   
-  // Start Python backend immediately after creating window
-  console.log('🚀 [MAIN] Starting Python backend immediately...');
-  
-  // Debug logging right before calling startPythonBackend
-  const fs2 = require('fs');
-  const debugPath2 = path.join(require('os').tmpdir(), 'deploybot-debug.txt');
-  fs2.writeFileSync(debugPath2, `About to call startPythonBackend at ${new Date().toISOString()}\n`, { flag: 'a' });
-  
-  startPythonBackend();
+  // Start comprehensive startup sequence
+  console.log('🚀 [MAIN] Starting comprehensive backend startup sequence...');
+  processManager.startComplete(isDev).then(success => {
+    if (success) {
+      console.log('✅ [MAIN] Backend startup sequence completed successfully');
+    } else {
+      console.error('❌ [MAIN] Backend startup sequence failed');
+    }
+  });
 
-  // Handle window closed
+  // Handle window closed with comprehensive cleanup
   mainWindow.on('closed', () => {
     console.log('🔴 [MAIN] Main window closed');
     log.info('Main window closed');
     mainWindow = null;
     
-    // Cleanup Python process and WebSocket
-    if (pythonProcess) {
-      console.log('🐍 [MAIN] Forcefully terminating existing Python process...', pythonProcess.pid);
-      try {
-        // First try graceful termination
-        pythonProcess.kill('SIGTERM');
-        
-        // If still running after 2 seconds, force kill
-        setTimeout(() => {
-          if (pythonProcess && !pythonProcess.killed) {
-            console.log('🐍 [MAIN] Force killing Python process with SIGKILL...', pythonProcess.pid);
-            pythonProcess.kill('SIGKILL');
-          }
-        }, 2000);
-      } catch (error) {
-        console.error('❌ [MAIN] Error killing Python process:', error);
-      }
-      pythonProcess = null;
-    }
-    
-    // Also kill any orphaned Python processes by port
-    try {
-      console.log('🧹 [MAIN] Cleaning up any processes on port 8765...');
-      require('child_process').exec('lsof -ti:8765 | xargs kill -9', (error) => {
-        if (error && !error.message.includes('No such process')) {
-          console.warn('⚠️ [MAIN] Port cleanup warning:', error.message);
-        } else {
-          console.log('✅ [MAIN] Port 8765 cleanup completed');
-        }
+    // Use process manager for comprehensive shutdown
+    if (processManager) {
+      processManager.shutdown().then(() => {
+        console.log('✅ [MAIN] Process manager shutdown completed');
+      }).catch(error => {
+        console.error('❌ [MAIN] Error during process manager shutdown:', error);
       });
-    } catch (error) {
-      console.warn('⚠️ [MAIN] Port cleanup failed:', error);
-    }
-    
-    if (wsConnection) {
-      console.log('🔌 [MAIN] Closing WebSocket connection...');
-      wsConnection.close();
-      wsConnection = null;
-    }
-    
-    // Cleanup temp directory (if created in packaged mode)
-    if (!isDev) {
-      const tempDir = path.join(require('os').tmpdir(), 'deploybot-backend');
-      try {
-        const fs = require('fs');
-        if (fs.existsSync(tempDir)) {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-          console.log('🧹 [MAIN] Cleaned up temp backend directory');
-        }
-      } catch (error) {
-        console.error('❌ [MAIN] Failed to cleanup temp directory:', error);
-      }
     }
   });
 
@@ -139,316 +98,330 @@ function createWindow() {
 }
 
 /**
- * Start the Python backend process
+ * Create a custom notification window in the upper right corner
  */
-function startPythonBackend() {
-  console.log('🐍 [MAIN] Starting Python backend...');
-  log.info('Starting Python backend process');
+function createNotificationWindow(notification) {
+  console.log('🔔 [NOTIFICATION] Creating custom notification window:', notification.id);
   
-  // First, ensure port 8765 is clear
-  try {
-    console.log('🧹 [MAIN] Checking for existing processes on port 8765...');
-    require('child_process').execSync('lsof -ti:8765 | xargs kill -9', { timeout: 5000 });
-    console.log('✅ [MAIN] Cleaned up existing processes on port 8765');
-  } catch (error) {
-    // This is expected if no processes are on the port
-    console.log('✅ [MAIN] Port 8765 is clear (no existing processes)');
+  // Calculate position based on existing notifications
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+  
+  const notificationWidth = 380;
+  // Dynamic height based on notification type
+  let notificationHeight = 160; // Default height
+  
+  if (notification.data?.type === 'unified_suggestion') {
+    notificationHeight = 480; // Very tall for unified notifications with timer + task info + multiple buttons
+  } else if (notification.data?.type === 'task_suggestion') {
+    notificationHeight = 200; // Taller for task suggestions with tags
   }
   
-  // Create a debug file to confirm this function is called
-  const fs3 = require('fs');
-  const debugPath3 = path.join(require('os').tmpdir(), 'deploybot-debug.txt');
-  fs3.writeFileSync(debugPath3, `startPythonBackend called at ${new Date().toISOString()}\n`, { flag: 'a' });
-
-  try {
-    let pythonScriptPath;
-    let workingDir;
-    
-    // Check if we're in development or packaged mode
-    console.log(`🔍 [MAIN] isDev: ${isDev}, __dirname: ${__dirname}`);
-    
-    // Force packaged mode for testing
-    const forcePackagedMode = __dirname.includes('app.asar');
-    console.log(`🔍 [MAIN] forcePackagedMode: ${forcePackagedMode}`);
-    
-    if (isDev && !forcePackagedMode) {
-      // Development mode: use source files
-      pythonScriptPath = path.join(__dirname, '../backend/graph.py');
-      workingDir = path.join(__dirname, '../backend');
-      console.log('🔧 [MAIN] Using development backend files');
-    } else {
-      // Packaged mode: extract Python files from ASAR to temp directory
-      const tempDir = path.join(require('os').tmpdir(), 'deploybot-backend');
-      const fs = require('fs');
-      
-      console.log('📦 [MAIN] Extracting Python backend from package...');
-      
-      // Create temp directory if it doesn't exist
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
+  const marginRight = 20;
+  const marginTop = 20;
+  
+  // Calculate Y position based on existing notifications with dynamic heights
+  let yPosition = marginTop;
+  if (notificationWindows.size > 0) {
+    // Sum up heights of existing notifications
+    for (const existingWindow of notificationWindows.values()) {
+      if (!existingWindow.isDestroyed()) {
+        yPosition += existingWindow.getBounds().height + notificationSpacing;
       }
-      
-      // Copy Python files from ASAR to temp directory
-      const asarPath = path.join(__dirname, '../backend');
-      const files = ['graph.py', 'logger.py', 'monitor.py', 'notification.py', 'project_manager.py', 'redirect.py', 'tasks.py', 'timer.py', 'deploybot_main.py'];
-      
-      for (const file of files) {
-        const srcPath = path.join(asarPath, file);
-        const destPath = path.join(tempDir, file);
-        try {
-          if (fs.existsSync(srcPath)) {
-            fs.copyFileSync(srcPath, destPath);
-            console.log(`📄 [MAIN] Copied ${file} to temp directory`);
-          }
-        } catch (error) {
-          console.error(`❌ [MAIN] Failed to copy ${file}:`, error);
-        }
-      }
-      
-      pythonScriptPath = path.join(tempDir, 'graph.py');
-      workingDir = tempDir;
-      console.log(`📦 [MAIN] Using extracted backend files in: ${tempDir}`);
     }
+  }
+  
+  // Create notification window
+  const notificationWindow = new BrowserWindow({
+    width: notificationWidth,
+    height: notificationHeight,
+    x: screenWidth - notificationWidth - marginRight,
+    y: yPosition,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      enableRemoteModule: false,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+    backgroundColor: 'rgba(0, 0, 0, 0)', // Transparent background
+    transparent: true,
+    vibrancy: 'under-window', // macOS blur effect
+    visualEffectState: 'active'
+  });
+
+  // Store window reference
+  notificationWindows.set(notification.id, notificationWindow);
+
+  // Load notification content
+  // Always load from the static HTML file since notifications need to be self-contained
+  notificationWindow.loadFile(path.join(__dirname, 'renderer/notification.html'), { 
+    query: { id: notification.id } 
+  });
+
+  // Send notification data to window when ready
+  notificationWindow.webContents.once('dom-ready', () => {
+    console.log('🔔 [NOTIFICATION] DOM ready for notification window:', notification.id);
+    console.log('🔔 [NOTIFICATION] Notification data to send:', JSON.stringify(notification, null, 2));
     
-    console.log(`🐍 [MAIN] Starting Python script: ${pythonScriptPath}`);
-    
-    // Use full path to python3 to avoid PATH issues in packaged app
-    // Always use the deploybot virtual environment Python
-    const pythonExecutable = path.join(__dirname, '../deploybot-env/bin/python3');
-    console.log(`🐍 [MAIN] Using Python executable: ${pythonExecutable}`);
-    
-    // Start Python process
-    pythonProcess = spawn(pythonExecutable, [pythonScriptPath], {
-      cwd: workingDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin' }
-    });
-
-    console.log('🐍 [MAIN] Python process started with PID:', pythonProcess.pid);
-
-    // Handle Python output
-    pythonProcess.stdout.on('data', (data) => {
-      const output = data.toString().trim();
-      console.log('🐍 [PYTHON_STDOUT]', output);
-      
-      // Forward Python output to renderer
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('python-output', output);
-      }
-    });
-
-    // Handle Python errors
-    pythonProcess.stderr.on('data', (data) => {
-      const error = data.toString().trim();
-      console.error('🐍 [PYTHON_STDERR]', error);
-      
-      // Forward Python errors to renderer
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('python-error', error);
-      }
-    });
-
-    // Handle Python process exit
-    pythonProcess.on('close', (code) => {
-      console.log(`🐍 [MAIN] Python process exited with code: ${code}`);
-      pythonProcess = null;
-      
-      // Restart Python if it exits unexpectedly (and we're not shutting down)
-      if (code !== 0 && !app.isQuiting && mainWindow && !mainWindow.isDestroyed()) {
-        console.log('🔄 [MAIN] Restarting Python backend after unexpected exit...');
-        setTimeout(() => startPythonBackend(), 3000);
-      }
-    });
-
-    pythonProcess.on('error', (error) => {
-      console.error('❌ [MAIN] Python process error:', error);
-      pythonProcess = null;
-      
-      // Forward error to renderer
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('python-error', `Python process error: ${error.message}`);
-      }
-    });
-
-    // Wait a moment then connect to WebSocket
     setTimeout(() => {
-      connectToWebSocket();
-    }, 2000);
+      notificationWindow.webContents.send('notification-data', notification);
+      console.log('🔔 [NOTIFICATION] Notification data sent to window');
+      
+      // Show with animation
+      notificationWindow.show();
+      console.log('🔔 [NOTIFICATION] Notification window shown');
+      
+      // Slide in animation
+      notificationWindow.setOpacity(0);
+      let opacity = 0;
+      const fadeIn = setInterval(() => {
+        // Check if window still exists before manipulating it
+        if (notificationWindow.isDestroyed()) {
+          clearInterval(fadeIn);
+          return;
+        }
+        opacity += 0.1;
+        notificationWindow.setOpacity(opacity);
+        if (opacity >= 1) {
+          clearInterval(fadeIn);
+        }
+      }, 30);
+    }, 100);
+  });
 
-  } catch (error) {
-    console.error('❌ [MAIN] Failed to start Python backend:', error);
-    
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('python-error', `Failed to start Python backend: ${error.message}`);
+  // Auto-dismiss after 10 seconds if no interaction
+  setTimeout(() => {
+    if (notificationWindows.has(notification.id)) {
+      closeNotificationWindow(notification.id);
     }
+  }, 10000);
+
+  // Handle window closed
+  notificationWindow.on('closed', () => {
+    console.log('🔔 [NOTIFICATION] Notification window closed:', notification.id);
+    notificationWindows.delete(notification.id);
+    repositionNotifications();
+  });
+
+  // Handle clicks
+  notificationWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      closeNotificationWindow(notification.id);
+    }
+  });
+
+  console.log('✅ [NOTIFICATION] Custom notification window created successfully');
+  return notificationWindow;
+}
+
+/**
+ * Close a specific notification window with animation
+ */
+function closeNotificationWindow(notificationId) {
+  const window = notificationWindows.get(notificationId);
+  if (!window) return;
+
+  console.log('🔔 [NOTIFICATION] Closing notification window:', notificationId);
+
+  // Fade out animation
+  let opacity = 1;
+  const fadeOut = setInterval(() => {
+    // Check if window still exists before manipulating it
+    if (window.isDestroyed()) {
+      clearInterval(fadeOut);
+      return;
+    }
+    opacity -= 0.1;
+    window.setOpacity(opacity);
+    if (opacity <= 0) {
+      clearInterval(fadeOut);
+      if (!window.isDestroyed()) {
+        window.close();
+      }
+    }
+  }, 30);
+}
+
+/**
+ * Reposition all notification windows after one is closed
+ */
+function repositionNotifications() {
+  const windows = Array.from(notificationWindows.values());
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth } = primaryDisplay.workAreaSize;
+  
+  const notificationWidth = 380;
+  const marginRight = 20;
+  const marginTop = 20;
+
+  let cumulativeY = marginTop;
+  
+  windows.forEach((window, index) => {
+    // Check if window still exists before manipulating it
+    if (window.isDestroyed()) {
+      return;
+    }
+    
+    // Get current window bounds to preserve height
+    const currentBounds = window.getBounds();
+    
+    window.setBounds({
+      x: screenWidth - notificationWidth - marginRight,
+      y: cumulativeY,
+      width: notificationWidth,
+      height: currentBounds.height // Preserve the original height
+    });
+    
+    // Update cumulative Y position for next window
+    cumulativeY += currentBounds.height + notificationSpacing;
+  });
+}
+
+/**
+ * Handle notification from Python backend
+ */
+function showCustomNotification(notification) {
+  console.log('🔔 [NOTIFICATION] Received notification request:', notification);
+  
+  // If we have too many notifications, close the oldest one
+  if (notificationWindows.size >= maxNotifications) {
+    const oldestId = notificationWindows.keys().next().value;
+    closeNotificationWindow(oldestId);
+  }
+
+  // Create the notification window
+  createNotificationWindow(notification);
+}
+
+/**
+ * Close all notification windows
+ */
+function closeAllNotifications() {
+  console.log('🔔 [NOTIFICATION] Closing all notification windows');
+  for (const notificationId of notificationWindows.keys()) {
+    closeNotificationWindow(notificationId);
   }
 }
 
 /**
- * Connect to the Python WebSocket server
+ * Set up event handlers for the process manager
  */
-function connectToWebSocket() {
-  const wsUrl = 'ws://localhost:8765';
-  console.log(`🔌 [MAIN] Connecting to WebSocket: ${wsUrl} (attempt ${connectionAttempts + 1}/${maxConnectionAttempts})`);
-  
-  try {
-    wsConnection = new WebSocket(wsUrl);
+function setupProcessManagerEventHandlers() {
+  if (!processManager) return;
 
-    wsConnection.on('open', () => {
-      console.log('✅ [MAIN] WebSocket connection established');
-      connectionAttempts = 0;
-      
-      // Send a ping to test the connection (with a small delay to ensure connection is ready)
-      setTimeout(() => {
-        if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-          try {
-            wsConnection.send(JSON.stringify({
-              command: 'ping',
-              data: { timestamp: new Date().toISOString() }
-            }));
-            console.log('📡 [MAIN] Initial ping sent to backend');
-          } catch (error) {
-            console.error('❌ [MAIN] Failed to send initial ping:', error);
-          }
-        }
-      }, 100);
-      
-      // Notify renderer that backend is connected
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('backend-update', {
-          type: 'system',
-          event: 'backend_connected',
-          message: 'Backend connection established',
-          data: { connected: true }
-        });
-      }
-    });
-
-    wsConnection.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        console.log('📡 [MAIN] WebSocket message received:', message);
-        
-        // Forward all backend messages to renderer as real-time updates
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('backend-update', message);
-        }
-      } catch (error) {
-        console.error('❌ [MAIN] Failed to parse WebSocket message:', error);
-      }
-    });
-
-    wsConnection.on('close', (code, reason) => {
-      console.log(`🔌 [MAIN] WebSocket connection closed: ${code} - ${reason}`);
-      wsConnection = null;
-      
-      // Notify renderer about disconnection
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('backend-update', {
-          type: 'system',
-          event: 'backend_disconnected',
-          message: 'Backend connection lost',
-          data: { connected: false, code, reason: reason.toString() }
-        });
-      }
-      
-      // Attempt to reconnect if not shutting down
-      if (!app.isQuiting && connectionAttempts < maxConnectionAttempts) {
-        connectionAttempts++;
-        console.log(`🔄 [MAIN] Attempting to reconnect WebSocket in 3 seconds... (${connectionAttempts}/${maxConnectionAttempts})`);
-        setTimeout(() => connectToWebSocket(), 3000);
-      } else if (connectionAttempts >= maxConnectionAttempts) {
-        console.error('❌ [MAIN] Max WebSocket connection attempts reached');
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('backend-update', {
-            type: 'system',
-            event: 'backend_connection_failed',
-            message: 'Failed to connect to backend after multiple attempts',
-            data: { connected: false, attempts: connectionAttempts }
-          });
-        }
-      }
-    });
-
-    wsConnection.on('error', (error) => {
-      console.error('❌ [MAIN] WebSocket error:', error);
-      
-      // Notify renderer about connection error
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('backend-update', {
-          type: 'system',
-          event: 'backend_error',
-          message: `Backend connection error: ${error.message}`,
-          data: { connected: false, error: error.message }
-        });
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ [MAIN] Failed to create WebSocket connection:', error);
-    
+  // Backend state changes
+  processManager.on('backend-state-changed', (state) => {
+    console.log(`🔄 [MAIN] Backend state changed: ${state}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('backend-update', {
         type: 'system',
-        event: 'backend_connection_failed',
-        message: `Failed to create WebSocket connection: ${error.message}`,
-        data: { connected: false, error: error.message }
+        event: 'backend_state_changed',
+        message: `Backend state: ${state}`,
+        data: { state, status: processManager.getStatus() }
       });
     }
-  }
+  });
+
+  // Connection state changes
+  processManager.on('connection-state-changed', (state) => {
+    console.log(`🔌 [MAIN] Connection state changed: ${state}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('backend-update', {
+        type: 'system',
+        event: 'connection_state_changed',
+        message: `Connection state: ${state}`,
+        data: { state, status: processManager.getStatus() }
+      });
+    }
+  });
+
+  // Python output
+  processManager.on('python-output', (output) => {
+    console.log('🐍 [PYTHON_STDOUT]', output);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('python-output', output);
+    }
+  });
+
+  // Python errors
+  processManager.on('python-error', (error) => {
+    console.error('🐍 [PYTHON_STDERR]', error);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('python-error', error);
+    }
+  });
+
+  // WebSocket messages
+  processManager.on('websocket-message', (message) => {
+    console.log('📥 [MAIN] WebSocket message:', message.type || 'unknown');
+    
+    // Handle custom notifications from backend
+    if (message.type === 'notification' && message.event === 'show_custom' && message.data?.notification) {
+      console.log('🔔 [MAIN] Received custom notification from backend:', message.data.notification);
+      showCustomNotification(message.data.notification);
+    }
+    
+    // Forward all messages to renderer for other handling
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('backend-update', message);
+    }
+  });
+
+  // Startup events
+  processManager.on('startup-complete', (status) => {
+    console.log('✅ [MAIN] Startup sequence completed:', status);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('backend-update', {
+        type: 'system',
+        event: 'startup_complete',
+        message: 'Backend and connection established',
+        data: status
+      });
+    }
+  });
+
+  processManager.on('startup-failed', (error) => {
+    console.error('❌ [MAIN] Startup sequence failed:', error);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('backend-update', {
+        type: 'system',
+        event: 'startup_failed',
+        message: `Startup failed: ${error.message}`,
+        data: { error: error.message }
+      });
+    }
+  });
 }
 
+// WebSocket connection is now handled by ProcessManager
+
 /**
- * Send command to Python backend via WebSocket
+ * Send command to Python backend via ProcessManager
  */
 async function sendPythonCommand(command, data = {}) {
-  console.log(`📡 [MAIN] Sending command to Python: ${command}`, data);
+  console.log(`📤 [MAIN] Sending Python command: ${command}`, data);
   
-  return new Promise((resolve, reject) => {
-    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
-      const error = 'WebSocket not connected to Python backend';
-      console.error('❌ [MAIN]', error);
-      reject(new Error(error));
-      return;
-    }
+  if (!processManager) {
+    throw new Error('Process manager not initialized');
+  }
 
-    const messageId = Date.now().toString();
-    const message = {
-      command,
-      data,
-      messageId,
-      timestamp: new Date().toISOString()
-    };
-
-    // Set up response handler
-    const responseHandler = (data) => {
-      try {
-        const response = JSON.parse(data.toString());
-        if (response.messageId === messageId || response.command === command) {
-          wsConnection.removeListener('message', responseHandler);
-          
-          console.log(`✅ [MAIN] Command response received: ${command}`, response);
-          resolve(response);
-        }
-      } catch (error) {
-        console.error('❌ [MAIN] Failed to parse command response:', error);
-        wsConnection.removeListener('message', responseHandler);
-        reject(error);
-      }
-    };
-
-    // Listen for response
-    wsConnection.on('message', responseHandler);
-
-    // Send the command
-    wsConnection.send(JSON.stringify(message));
-    
-    // Set timeout for response
-    setTimeout(() => {
-      wsConnection.removeListener('message', responseHandler);
-      reject(new Error(`Command timeout: ${command}`));
-    }, 30000); // 30 second timeout
-  });
+  try {
+    const response = await processManager.sendCommand(command, data);
+    console.log('✅ [MAIN] Command sent successfully via process manager');
+    return response;
+  } catch (error) {
+    console.error('❌ [MAIN] Error sending command via process manager:', error);
+    throw error;
+  }
 }
 
 /**
@@ -562,6 +535,61 @@ function setupIPC() {
       return { success: false, error: error.message };
     }
   });
+
+  // Handle custom notification requests
+  ipcMain.handle('show-notification', async (event, notification) => {
+    console.log('🔔 [IPC] Custom notification request:', notification);
+    log.info('Custom notification request', { notification });
+    
+    try {
+      showCustomNotification(notification);
+      return { success: true, message: 'Notification displayed' };
+    } catch (error) {
+      console.error('❌ [IPC] Failed to show notification:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Handle notification action (click, dismiss, etc.)
+  ipcMain.handle('notification-action', async (event, notificationId, action, data) => {
+    console.log('🔔 [IPC] Notification action:', { notificationId, action, data });
+    log.info('Notification action', { notificationId, action, data });
+    
+    try {
+      if (action === 'dismiss') {
+        closeNotificationWindow(notificationId);
+        return { success: true, message: 'Notification dismissed' };
+      } else if (action === 'click') {
+        // Handle notification click - could open app, switch task, etc.
+        console.log('🔔 [IPC] Notification clicked:', notificationId);
+        
+        // Send action back to Python backend for processing
+        const response = await sendPythonCommand('notification-action', {
+          notification_id: notificationId,
+          action: action,
+          data: data
+        });
+        
+        // Close the notification after action
+        closeNotificationWindow(notificationId);
+        
+        return response;
+      } else {
+        // Forward other actions to Python backend
+        const response = await sendPythonCommand('notification-action', {
+          notification_id: notificationId,
+          action: action,
+          data: data
+        });
+        return response;
+      }
+    } catch (error) {
+      console.error('❌ [IPC] Failed to handle notification action:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Note: Custom notification listening is handled in the main WebSocket message handler
 }
 
 /**
@@ -626,29 +654,13 @@ app.on('window-all-closed', () => {
   // Mark app as quitting to prevent reconnections
   app.isQuiting = true;
   
-  // Cleanup Python process
-  if (pythonProcess) {
-    console.log('🐍 [MAIN] Terminating Python backend process on app quit...');
-    try {
-      pythonProcess.kill('SIGKILL'); // Force kill on app quit
-    } catch (error) {
-      console.error('❌ [MAIN] Error killing Python process on quit:', error);
-    }
-  }
-  
-  // Also kill any processes on port 8765
-  try {
-    require('child_process').exec('lsof -ti:8765 | xargs kill -9', () => {
-      console.log('🧹 [MAIN] Port cleanup on app quit completed');
+  // Use process manager for comprehensive cleanup
+  if (processManager) {
+    processManager.shutdown().then(() => {
+      console.log('✅ [MAIN] Process manager shutdown completed on app quit');
+    }).catch(error => {
+      console.error('❌ [MAIN] Error during process manager shutdown on quit:', error);
     });
-  } catch (error) {
-    console.warn('⚠️ [MAIN] Port cleanup on quit failed:', error);
-  }
-  
-  // Cleanup WebSocket
-  if (wsConnection) {
-    console.log('🔌 [MAIN] Closing WebSocket on app quit...');
-    wsConnection.close();
   }
   
   // Unregister global shortcuts
@@ -667,11 +679,13 @@ app.on('before-quit', () => {
   console.log('🛑 [MAIN] Application shutting down...');
   log.info('Application shutting down');
   
-  // Cleanup WebSocket connection
-  if (wsConnection) {
-    console.log('🔌 [MAIN] Disconnecting WebSocket connection...');
-    log.info('Disconnecting WebSocket connection');
-    wsConnection.close();
+  // Mark as quitting
+  app.isQuiting = true;
+  
+  // Use process manager for shutdown
+  if (processManager) {
+    console.log('🧹 [MAIN] Initiating process manager shutdown...');
+    processManager.shutdown();
   }
   
   // Unregister global shortcuts
@@ -718,33 +732,13 @@ process.on('SIGTERM', () => {
 function cleanup() {
   console.log('🧹 [MAIN] Starting comprehensive cleanup...');
   
-  // Kill Python process
-  if (pythonProcess) {
-    try {
-      pythonProcess.kill('SIGKILL');
-      console.log('✅ [MAIN] Python process terminated');
-    } catch (error) {
-      console.error('❌ [MAIN] Error terminating Python process:', error);
-    }
-  }
-  
-  // Kill any processes on port 8765
-  try {
-    require('child_process').execSync('lsof -ti:8765 | xargs kill -9', { timeout: 5000 });
-    console.log('✅ [MAIN] Port 8765 cleanup completed');
-  } catch (error) {
-    // This is expected if no processes are on the port
-    console.log('🧹 [MAIN] Port cleanup completed (no processes found)');
-  }
-  
-  // Close WebSocket
-  if (wsConnection) {
-    try {
-      wsConnection.close();
-      console.log('✅ [MAIN] WebSocket closed');
-    } catch (error) {
-      console.error('❌ [MAIN] Error closing WebSocket:', error);
-    }
+  if (processManager) {
+    // Use emergency cleanup for immediate shutdown
+    processManager.emergencyCleanup().then(() => {
+      console.log('✅ [MAIN] Emergency cleanup completed');
+    }).catch(error => {
+      console.error('❌ [MAIN] Error during emergency cleanup:', error);
+    });
   }
   
   console.log('🧹 [MAIN] Cleanup completed');

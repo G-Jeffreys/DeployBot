@@ -131,10 +131,9 @@ DeployBot/
 │   ├── main.js               # Main process
 │   ├── preload.js            # Security bridge
 │   └── renderer/             # React UI components
-├── bridge/                   # WebSocket IPC communication
-│   └── websocket_bridge.js   # Electron ↔ Python bridge
-├── langgraph/               # Python backend (LangGraph)
-│   ├── graph.py             # Main workflow orchestration
+├── main/process_manager.js   # WebSocket communication with Python
+├── backend/                 # Python backend (LangGraph)
+│   ├── graph.py             # LangGraph workflow & WebSocket server
 │   ├── monitor.py           # Deploy detection
 │   ├── timer.py             # Timer management
 │   ├── tasks.py             # Task selection (LLM + heuristic)
@@ -191,7 +190,7 @@ DeployBot uses hashtag-based task classification in your TODO.md files:
 - **OpenAI GPT**: Optional LLM-enhanced task selection
 
 ### Communication
-- **WebSocket Bridge**: Electron ↔ Python with reconnection and message queuing
+- **ProcessManager**: Electron ↔ Python communication with WebSocket and message queuing
 - **IPC Security**: Context isolation with secure preload script
 - **File Monitoring**: Real-time deploy log detection with position tracking
 

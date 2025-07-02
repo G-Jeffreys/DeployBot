@@ -45,7 +45,7 @@ class NotificationManager:
             "in_app_modals_enabled": True,
             "sound_enabled": True,
             "auto_dismiss_timeout": 0,  # DISABLED - notifications should persist until manually dismissed
-            "grace_period": 30,  # 30 seconds before task suggestion
+            "grace_period": 0,  # NO GRACE PERIOD - immediate task suggestions
             "notification_persistence": True
         }
         
@@ -78,6 +78,13 @@ class NotificationManager:
                 "actions": ["View Logs", "Dismiss"],
                 "category": "deploy",
                 "sound": "success"
+            },
+            "unified_suggestion": {
+                "title": "🎯⏰ Task & Timer Update", 
+                "message": "Timer update with task suggestion available",
+                "actions": ["Switch to Task", "Start New Timer", "View Timer", "Snooze", "Dismiss"],
+                "category": "unified",
+                "sound": "default"
             }
         }
         
@@ -117,7 +124,7 @@ class NotificationManager:
         return await self._send_notification("deploy_detected", notification_data)
 
     async def notify_task_suggestion(self, project_name: str, task: Dict[str, Any], 
-                                   context: Dict[str, Any] = None) -> str:
+                                   context: Optional[Dict[str, Any]] = None) -> str:
         """Send notification suggesting an alternative task"""
         logger.info("🎯 [NOTIFY] Sending task suggestion notification", 
                    project=project_name, task=task.get('text', ''))
@@ -168,6 +175,51 @@ class NotificationManager:
         
         return await self._send_notification("deploy_completed", notification_data)
 
+    async def notify_unified_suggestion(self, project_name: str, 
+                                      timer_info: Optional[Dict[str, Any]] = None,
+                                      task: Optional[Dict[str, Any]] = None,
+                                      context: Optional[Dict[str, Any]] = None) -> str:
+        """Send unified notification combining timer updates and task suggestions"""
+        logger.info("🎯⏰ [NOTIFY] Sending unified suggestion notification", 
+                   project=project_name, 
+                   has_timer=timer_info is not None,
+                   has_task=task is not None)
+        
+        # Build contextual message based on what information we have
+        message_parts = []
+        
+        if timer_info:
+            timer_status = timer_info.get('status', 'unknown')
+            if timer_status == 'expired':
+                message_parts.append(f"⏰ Timer expired for {project_name}")
+            elif timer_status == 'running':
+                remaining = timer_info.get('time_remaining_formatted', 'unknown')
+                message_parts.append(f"⏰ Timer running: {remaining} left")
+            else:
+                message_parts.append(f"⏰ Timer {timer_status}")
+        
+        if task:
+            message_parts.append(f"🎯 Suggested: {task.get('text', 'Unknown task')}")
+        
+        # Fallback message if neither timer nor task info provided
+        if not message_parts:
+            message_parts.append("📋 Workflow update available")
+        
+        notification_data = {
+            "type": "unified_suggestion",
+            "project_name": project_name,
+            "timer_info": timer_info,
+            "task": task,
+            "context": context or {},
+            "timestamp": datetime.now().isoformat(),
+            "has_timer": timer_info is not None,
+            "has_task": task is not None,
+            "estimated_duration": task.get('estimated_duration', 45) if task else None,
+            "task_app": task.get('app', 'Unknown') if task else None
+        }
+        
+        return await self._send_notification("unified_suggestion", notification_data)
+
     async def _send_notification(self, template_name: str, data: Dict[str, Any]) -> str:
         """Send a notification using the specified template"""
         
@@ -194,7 +246,11 @@ class NotificationManager:
         # Add to history
         self._add_to_history(notification)
         
-        # Send system notification if enabled
+        # Send custom notification via WebSocket to main process
+        # This replaces system notifications with our custom implementation
+        await self._send_custom_notification(notification)
+        
+        # Send system notification if enabled (as fallback)
         if self.preferences["system_notifications_enabled"]:
             await self._send_system_notification(notification)
         
@@ -214,6 +270,36 @@ class NotificationManager:
                    template=template_name)
         
         return notification_id
+
+    async def _send_custom_notification(self, notification: Dict[str, Any]):
+        """Send custom notification via WebSocket to Electron main process"""
+        
+        logger.info("🔔 [NOTIFY] Sending custom notification via WebSocket", 
+                   notification_id=notification["id"],
+                   title=notification["title"])
+        
+        if not self.websocket_server:
+            logger.warning("⚠️ [NOTIFY] WebSocket server not available for custom notification")
+            return
+        
+        try:
+            # Send custom notification message to main process
+            message = {
+                "type": "notification",
+                "event": "show_custom",
+                "data": {
+                    "notification": notification,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            await self.websocket_server.broadcast(message)
+            logger.info("✅ [NOTIFY] Custom notification sent successfully via WebSocket", 
+                       notification_id=notification["id"])
+            
+        except Exception as e:
+            logger.error("❌ [NOTIFY] Failed to send custom notification", 
+                        notification_id=notification["id"], error=str(e))
 
     async def _send_system_notification(self, notification: Dict[str, Any]):
         """Send macOS system notification with multiple fallback methods"""
@@ -404,7 +490,7 @@ You can delete this file after reading the notification.
             logger.error("❌ [NOTIFY] Failed to send in-app notification", error=str(e))
 
     async def handle_notification_response(self, notification_id: str, action: str, 
-                                         additional_data: Dict[str, Any] = None) -> bool:
+                                         additional_data: Optional[Dict[str, Any]] = None) -> bool:
         """Handle user response to a notification"""
         logger.info("👆 [NOTIFY] Handling notification response", 
                    notification_id=notification_id, action=action)
@@ -451,13 +537,21 @@ You can delete this file after reading the notification.
                 # Handle task switching
                 await self._handle_task_switch(notification, additional_data)
                 
+            elif action == "switch_to_task" and notification_type == "unified_suggestion":
+                # Handle task switching from unified notification
+                await self._handle_task_switch(notification, additional_data)
+                
             elif action.startswith("snooze"):
                 # Handle snoozing
                 await self._handle_snooze(notification, action, additional_data)
                 
-            elif action == "view_timer" and notification_type == "deploy_detected":
+            elif action == "view_timer" and notification_type in ["deploy_detected", "unified_suggestion"]:
                 # Send timer status to frontend
                 await self._send_timer_status(notification)
+                
+            elif action == "start_new_timer" and notification_type == "unified_suggestion":
+                # Handle starting a new timer
+                await self._handle_start_new_timer(notification, additional_data)
                 
             elif action == "view_logs" and notification_type == "deploy_completed":
                 # Send log information to frontend
@@ -525,6 +619,38 @@ You can delete this file after reading the notification.
         
         # Store snooze task for potential cancellation
         notification["snooze_task"] = snooze_task
+
+    async def _handle_start_new_timer(self, notification: Dict[str, Any], additional_data: Dict[str, Any]):
+        """Handle starting a new timer from unified notification"""
+        
+        project_name = notification["data"]["project_name"]
+        
+        logger.info("⏰ [NOTIFY] Processing start new timer request", project=project_name)
+        
+        # Import timer module to start new timer
+        from . import timer
+        
+        # Start a new timer (default 30 minutes)
+        timer_duration = additional_data.get('duration', 1800)  # Default 30 minutes
+        deploy_command = f"Manual timer for {project_name}"
+        
+        # Start the timer
+        await timer.deploy_timer.start_timer(project_name, timer_duration, deploy_command)
+        
+        # Notify frontend of new timer
+        if self.websocket_server:
+            await self.websocket_server.broadcast({
+                "type": "timer",
+                "event": "timer_started",
+                "data": {
+                    "project_name": project_name,
+                    "timer_duration": timer_duration,
+                    "deploy_command": deploy_command,
+                    "timestamp": datetime.now().isoformat()
+                }
+            })
+        
+        logger.info("✅ [NOTIFY] New timer started", project=project_name, duration=timer_duration)
 
     async def _reschedule_notification(self, notification: Dict[str, Any], delay_seconds: int):
         """Reschedule a notification after snooze period"""
@@ -694,6 +820,38 @@ You can delete this file after reading the notification.
         
         logger.info("🧪 [NOTIFY] Sending test notification", type=notification_type)
         return await self._send_notification(notification_type, test_data)
+
+    async def test_unified_notification(self) -> str:
+        """Send a test unified notification combining timer and task info"""
+        
+        # Create test timer info
+        test_timer_info = {
+            "status": "running",
+            "time_remaining_formatted": "22:15",
+            "duration_seconds": 1800,
+            "project_name": "TestProject"
+        }
+        
+        # Create test task info
+        test_task = {
+            "text": "Write documentation for unified notifications",
+            "app": "Bear",
+            "tags": ["#writing", "#docs"],
+            "estimated_duration": 25
+        }
+        
+        test_context = {
+            "deploy_active": True,
+            "timer_duration": 1800
+        }
+        
+        logger.info("🧪 [NOTIFY] Sending test unified notification")
+        return await self.notify_unified_suggestion(
+            "TestProject",
+            timer_info=test_timer_info,
+            task=test_task,
+            context=test_context
+        )
 
 # Global instance
 notification_manager = NotificationManager() 

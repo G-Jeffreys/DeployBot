@@ -7,6 +7,7 @@ deleting, listing, and loading project data from the filesystem.
 """
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -580,5 +581,35 @@ This is the task list for {project_name}. Tasks are tagged with hashtags to help
 DeployBot will automatically suggest tasks from this list when backend deployments are detected. Tasks tagged with `#backend` will be deprioritized during deploy periods to avoid conflicts.
 """
 
-# Global instance
-project_manager = ProjectManager() 
+# Global instance - find the correct projects directory
+def _find_projects_directory():
+    """Find the real projects directory, handling temp directory case"""
+    # Check for environment variable first
+    projects_root = os.environ.get('DEPLOYBOT_PROJECTS_ROOT')
+    if projects_root and Path(projects_root).exists():
+        return projects_root
+    
+    current_dir = Path(__file__).parent
+    
+    # If we're in a temp directory, we need to find the real DeployBot directory
+    if 'tmp' in str(current_dir) or 'temp' in str(current_dir):
+        logger.info("🔍 [PROJECT_MANAGER] Detected temp directory, searching for real projects path")
+        
+        # Look for the projects directory in common locations
+        possible_paths = [
+            Path.home() / "Documents" / "DeployBot" / "projects",
+            Path("/Users") / os.environ.get('USER', 'default') / "Documents" / "DeployBot" / "projects",
+            Path.cwd() / "projects"  # If running from DeployBot directory
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                logger.info("✅ [PROJECT_MANAGER] Found real projects directory", path=str(path))
+                return str(path)
+        
+        logger.warning("⚠️ [PROJECT_MANAGER] Could not find real projects directory, using fallback")
+    
+    # Final fallback to original logic
+    return str(current_dir.parent / "projects")
+
+project_manager = ProjectManager(_find_projects_directory()) 
