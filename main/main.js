@@ -81,9 +81,36 @@ function createWindow() {
     
     // Cleanup Python process and WebSocket
     if (pythonProcess) {
-      console.log('🐍 [MAIN] Terminating Python backend process...');
-      pythonProcess.kill();
+      console.log('🐍 [MAIN] Forcefully terminating existing Python process...', pythonProcess.pid);
+      try {
+        // First try graceful termination
+        pythonProcess.kill('SIGTERM');
+        
+        // If still running after 2 seconds, force kill
+        setTimeout(() => {
+          if (pythonProcess && !pythonProcess.killed) {
+            console.log('🐍 [MAIN] Force killing Python process with SIGKILL...', pythonProcess.pid);
+            pythonProcess.kill('SIGKILL');
+          }
+        }, 2000);
+      } catch (error) {
+        console.error('❌ [MAIN] Error killing Python process:', error);
+      }
       pythonProcess = null;
+    }
+    
+    // Also kill any orphaned Python processes by port
+    try {
+      console.log('🧹 [MAIN] Cleaning up any processes on port 8765...');
+      require('child_process').exec('lsof -ti:8765 | xargs kill -9', (error) => {
+        if (error && !error.message.includes('No such process')) {
+          console.warn('⚠️ [MAIN] Port cleanup warning:', error.message);
+        } else {
+          console.log('✅ [MAIN] Port 8765 cleanup completed');
+        }
+      });
+    } catch (error) {
+      console.warn('⚠️ [MAIN] Port cleanup failed:', error);
     }
     
     if (wsConnection) {
@@ -117,6 +144,16 @@ function createWindow() {
 function startPythonBackend() {
   console.log('🐍 [MAIN] Starting Python backend...');
   log.info('Starting Python backend process');
+  
+  // First, ensure port 8765 is clear
+  try {
+    console.log('🧹 [MAIN] Checking for existing processes on port 8765...');
+    require('child_process').execSync('lsof -ti:8765 | xargs kill -9', { timeout: 5000 });
+    console.log('✅ [MAIN] Cleaned up existing processes on port 8765');
+  } catch (error) {
+    // This is expected if no processes are on the port
+    console.log('✅ [MAIN] Port 8765 is clear (no existing processes)');
+  }
   
   // Create a debug file to confirm this function is called
   const fs3 = require('fs');
@@ -176,7 +213,8 @@ function startPythonBackend() {
     console.log(`🐍 [MAIN] Starting Python script: ${pythonScriptPath}`);
     
     // Use full path to python3 to avoid PATH issues in packaged app
-    const pythonExecutable = isDev ? 'python3' : '/opt/homebrew/bin/python3';
+    // Always use the deploybot virtual environment Python
+    const pythonExecutable = path.join(__dirname, '../deploybot-env/bin/python3');
     console.log(`🐍 [MAIN] Using Python executable: ${pythonExecutable}`);
     
     // Start Python process
@@ -582,7 +620,7 @@ app.whenReady().then(() => {
 
 // All windows closed
 app.on('window-all-closed', () => {
-  console.log('�� [MAIN] All windows closed');
+  console.log('🛑 [MAIN] All windows closed');
   log.info('All windows closed');
   
   // Mark app as quitting to prevent reconnections
@@ -591,7 +629,20 @@ app.on('window-all-closed', () => {
   // Cleanup Python process
   if (pythonProcess) {
     console.log('🐍 [MAIN] Terminating Python backend process on app quit...');
-    pythonProcess.kill();
+    try {
+      pythonProcess.kill('SIGKILL'); // Force kill on app quit
+    } catch (error) {
+      console.error('❌ [MAIN] Error killing Python process on quit:', error);
+    }
+  }
+  
+  // Also kill any processes on port 8765
+  try {
+    require('child_process').exec('lsof -ti:8765 | xargs kill -9', () => {
+      console.log('🧹 [MAIN] Port cleanup on app quit completed');
+    });
+  } catch (error) {
+    console.warn('⚠️ [MAIN] Port cleanup on quit failed:', error);
   }
   
   // Cleanup WebSocket
@@ -647,6 +698,57 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ [MAIN] Unhandled rejection at:', promise, 'reason:', reason);
 });
+
+// Handle process termination signals
+process.on('SIGINT', () => {
+  console.log('🛑 [MAIN] SIGINT received, cleaning up...');
+  cleanup();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('🛑 [MAIN] SIGTERM received, cleaning up...');
+  cleanup();
+  process.exit(0);
+});
+
+/**
+ * Comprehensive cleanup function
+ */
+function cleanup() {
+  console.log('🧹 [MAIN] Starting comprehensive cleanup...');
+  
+  // Kill Python process
+  if (pythonProcess) {
+    try {
+      pythonProcess.kill('SIGKILL');
+      console.log('✅ [MAIN] Python process terminated');
+    } catch (error) {
+      console.error('❌ [MAIN] Error terminating Python process:', error);
+    }
+  }
+  
+  // Kill any processes on port 8765
+  try {
+    require('child_process').execSync('lsof -ti:8765 | xargs kill -9', { timeout: 5000 });
+    console.log('✅ [MAIN] Port 8765 cleanup completed');
+  } catch (error) {
+    // This is expected if no processes are on the port
+    console.log('🧹 [MAIN] Port cleanup completed (no processes found)');
+  }
+  
+  // Close WebSocket
+  if (wsConnection) {
+    try {
+      wsConnection.close();
+      console.log('✅ [MAIN] WebSocket closed');
+    } catch (error) {
+      console.error('❌ [MAIN] Error closing WebSocket:', error);
+    }
+  }
+  
+  console.log('🧹 [MAIN] Cleanup completed');
+}
 
 console.log('🚀 [MAIN] DeployBot main process initialized');
 log.info('DeployBot main process initialized'); 

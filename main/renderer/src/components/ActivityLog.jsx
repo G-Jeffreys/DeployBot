@@ -94,9 +94,11 @@ function ActivityLog({ project }) {
       }
       
       // Set up WebSocket listener (only once globally)
-      if (window.electronAPI?.onBackendUpdate) {
+      if (window.electronAPI?.events?.onBackendUpdate) {
         console.log('📋 [ACTIVITY_LOG] Setting up global WebSocket listener')
-        window.electronAPI.onBackendUpdate(globalActivityManager.handleBackendUpdate)
+        window.electronAPI.events.onBackendUpdate(globalActivityManager.handleBackendUpdate)
+      } else {
+        console.error('❌ [ACTIVITY_LOG] electronAPI.events.onBackendUpdate not available')
       }
       
       // Add initial activity

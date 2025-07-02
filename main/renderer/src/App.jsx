@@ -38,6 +38,94 @@ function App() {
     }
   }, [backendStatus])
 
+  // 🔧 NEW: Listen for real-time backend updates via WebSocket
+  useEffect(() => {
+    console.log('📡 [APP] Setting up WebSocket backend event listener...')
+    
+    const handleBackendUpdate = (message) => {
+      console.log('📥 [APP] Backend update received:', message)
+      
+      try {
+        // Handle different message types
+        switch (message.type) {
+          case 'timer_update':
+            console.log('⏰ [APP] Timer update received:', message.data)
+            setTimerData({
+              isActive: message.data.status === 'running',
+              timeRemaining: message.data.time_remaining_formatted,
+              progress: message.data.progress_percentage,
+              projectName: message.data.project_name,
+              deployCommand: message.data.deploy_command
+            })
+            break
+            
+          case 'deploy':
+            console.log('🚀 [APP] Deploy event received:', message.event, message.data)
+            if (message.event === 'deploy_detected') {
+              setDeployStatus({
+                isActive: true,
+                command: message.data.command,
+                project: message.data.project
+              })
+            }
+            break
+            
+          case 'system':
+            console.log('⚙️ [APP] System event received:', message.event, message.data)
+            if (message.event === 'backend_connected') {
+              setIsBackendConnected(true)
+              setBackendStatus('connected')
+              console.log('✅ [APP] Backend connected via WebSocket event')
+            } else if (message.event === 'backend_disconnected') {
+              setIsBackendConnected(false)
+              setBackendStatus('disconnected')
+              console.log('🔴 [APP] Backend disconnected via WebSocket event')
+            }
+            break
+            
+          case 'response':
+            // Handle command responses (like ping)
+            console.log('📡 [APP] Command response received:', message.command, message.data)
+            if (message.command === 'ping' && message.data.success) {
+              setIsBackendConnected(true)
+              setBackendStatus('connected')
+            }
+            break
+            
+          default:
+            console.log('❓ [APP] Unknown message type:', message.type, message)
+        }
+        
+        // Update last activity for any meaningful message
+        if (message.type !== 'timer_update') { // Don't spam with timer updates
+          setLastActivity({
+            message: message.event || message.type,
+            timestamp: new Date().toISOString()
+          })
+        }
+        
+      } catch (error) {
+        console.error('❌ [APP] Error processing backend update:', error, message)
+      }
+    }
+    
+    // Register the event listener
+    if (window.electronAPI?.events?.onBackendUpdate) {
+      window.electronAPI.events.onBackendUpdate(handleBackendUpdate)
+      console.log('✅ [APP] WebSocket backend event listener registered')
+      
+      // Cleanup function
+      return () => {
+        console.log('🧹 [APP] Cleaning up WebSocket backend event listener...')
+        if (window.electronAPI?.events?.removeBackendUpdateListener) {
+          window.electronAPI.events.removeBackendUpdateListener(handleBackendUpdate)
+        }
+      }
+    } else {
+      console.error('❌ [APP] electronAPI.events.onBackendUpdate not available')
+    }
+  }, []) // Run once on mount
+
   // Event handlers are now managed globally by ActivityLog component
   // App component focuses on connection management and routing
 
@@ -225,6 +313,8 @@ function App() {
                 <ProjectSelector
                   selectedProject={selectedProject}
                   onProjectSelect={handleProjectSelect}
+                  isBackendConnected={isBackendConnected}
+                  backendStatus={backendStatus}
                 />
               </div>
             </div>

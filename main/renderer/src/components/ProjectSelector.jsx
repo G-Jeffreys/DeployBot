@@ -1,17 +1,23 @@
 import React, { useState, useEffect } from 'react'
 
-const ProjectSelector = ({ selectedProject, onProjectSelect }) => {
+const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected, backendStatus }) => {
   const [projects, setProjects] = useState([])
   const [isCreating, setIsCreating] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  // Load projects on component mount
+  // Load projects when backend becomes connected
   useEffect(() => {
-    console.log('📁 [PROJECT_SELECTOR] Component initializing...')
-    loadProjects()
-  }, [])
+    console.log('📁 [PROJECT_SELECTOR] Component initializing...', { isBackendConnected, backendStatus })
+    
+    if (isBackendConnected && backendStatus === 'connected') {
+      console.log('📁 [PROJECT_SELECTOR] Backend is connected, loading projects...')
+      loadProjects()
+    } else {
+      console.log('📁 [PROJECT_SELECTOR] Waiting for backend connection...', { isBackendConnected, backendStatus })
+    }
+  }, [isBackendConnected, backendStatus]) // Load projects when connection status changes
 
   /**
    * Load projects from backend
@@ -21,30 +27,36 @@ const ProjectSelector = ({ selectedProject, onProjectSelect }) => {
     setIsLoading(true)
     setError(null) // Clear any previous errors
     
+    // Don't try to load if backend isn't connected
+    if (!isBackendConnected || backendStatus !== 'connected') {
+      console.log('📁 [PROJECT_SELECTOR] Backend not connected, skipping project load')
+      setIsLoading(false)
+      setError('Waiting for backend connection...')
+      return
+    }
+    
     try {
-      // Check if backend is available - retry if not connected yet
-      let retries = 3
+      // Since we know backend is connected, use fewer retries
+      let retries = 2
       let response = null
       let lastError = null
       
-              while (retries > 0) {
-          try {
-            response = await window.electronAPI?.project.list()
-            break // Success, exit retry loop
-          } catch (error) {
-            lastError = error
-            if (error.message?.includes('WebSocket not connected') && retries > 1) {
-              console.log(`📁 [PROJECT_SELECTOR] Backend not ready, retrying in 1s... (${retries} attempts left)`)
-              // Show connecting status during retries instead of error
-              setError(`🔄 Connecting to backend... (${4 - retries}/3)`)
-              await new Promise(resolve => setTimeout(resolve, 1000))
-              retries--
-              continue
-            }
-            // Only throw after all retries are exhausted
-            throw lastError
+      while (retries > 0) {
+        try {
+          response = await window.electronAPI?.project.list()
+          break // Success, exit retry loop
+        } catch (error) {
+          lastError = error
+          if (error.message?.includes('WebSocket not connected') && retries > 1) {
+            console.log(`📁 [PROJECT_SELECTOR] Temporary connection issue, retrying... (${retries} attempts left)`)
+            setError(`🔄 Retrying... (${3 - retries}/2)`)
+            await new Promise(resolve => setTimeout(resolve, 500)) // Shorter delay since backend should be ready
+            retries--
+            continue
           }
+          throw lastError
         }
+      }
       
       console.log('📁 [PROJECT_SELECTOR] Backend project list response:', JSON.stringify(response, null, 2))
       
@@ -227,8 +239,13 @@ const ProjectSelector = ({ selectedProject, onProjectSelect }) => {
    * Refresh projects list
    */
   const handleRefresh = () => {
-    console.log('🔄 [PROJECT_SELECTOR] Refreshing projects list...')
-    loadProjects()
+    console.log('🔄 [PROJECT_SELECTOR] Refreshing projects list...', { isBackendConnected, backendStatus })
+    if (isBackendConnected && backendStatus === 'connected') {
+      loadProjects()
+    } else {
+      console.log('📁 [PROJECT_SELECTOR] Backend not connected, cannot refresh projects')
+      setError('Backend is not connected. Please wait for connection to be established.')
+    }
   }
 
   return (
@@ -243,7 +260,7 @@ const ProjectSelector = ({ selectedProject, onProjectSelect }) => {
             onClick={handleRefresh}
             className="btn-outline text-xs"
             disabled={isLoading}
-            title="Refresh projects"
+            title={isBackendConnected ? "Refresh projects" : "Backend not connected"}
           >
             🔄
           </button>
@@ -325,12 +342,19 @@ const ProjectSelector = ({ selectedProject, onProjectSelect }) => {
       )}
 
       {/* Loading State */}
-      {isLoading && !isCreating && (
+      {(isLoading && !isCreating) || (!isBackendConnected) ? (
         <div className="text-center py-4">
-          <div className="text-2xl mb-2">⏳</div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Loading projects...</p>
+          <div className="text-2xl mb-2">
+            {!isBackendConnected ? '🔄' : '⏳'}
+          </div>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {!isBackendConnected 
+              ? `Waiting for backend connection... (${backendStatus})`
+              : 'Loading projects...'
+            }
+          </p>
         </div>
-      )}
+      ) : null}
 
       {/* Project List */}
       <div className="space-y-2">
@@ -419,7 +443,9 @@ const ProjectSelector = ({ selectedProject, onProjectSelect }) => {
 
       {/* Backend Status */}
       <div className="text-xs text-gray-500 dark:text-gray-400 text-center pt-2 border-t border-gray-200 dark:border-gray-700">
-        {projects.length > 0 ? (
+        {!isBackendConnected ? (
+          <span>🔄 Backend: {backendStatus}</span>
+        ) : projects.length > 0 ? (
           <span>✅ {projects.length} project{projects.length !== 1 ? 's' : ''} loaded from backend</span>
         ) : !isLoading ? (
           <span>📡 Connected to backend • No projects found</span>
