@@ -373,7 +373,7 @@
         
         // General actions
         buttons += `
-          <button class="notification-btn notification-btn-gray" onclick="handleAction('snooze', event)">
+          <button class="notification-btn notification-btn-gray" onclick="handleAction('snooze', event)" style="display: none">
             Snooze 5min
           </button>
         `;
@@ -386,7 +386,7 @@
           <button class="notification-btn notification-btn-primary" onclick="handleAction('switch_now', event)">
             Switch Now
           </button>
-          <button class="notification-btn notification-btn-secondary" onclick="handleAction('snooze_5min', event)">
+          <button class="notification-btn notification-btn-secondary" onclick="handleAction('snooze_5min', event)" style="display: none">
             Snooze 5min
           </button>
         `;

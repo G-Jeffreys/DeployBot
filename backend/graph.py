@@ -850,6 +850,168 @@ class WebSocketServer:
                 else:
                     return {"success": False, "message": "No project path provided"}
                 
+            # 📊 ANALYTICS ENDPOINTS: New commands for productivity analytics
+            elif command == "get-analytics-summary":
+                project_name = data.get("project_name")
+                
+                if project_name:
+                    try:
+                        from analytics import analytics_manager
+                        analytics_summary = await analytics_manager.get_project_analytics_summary(project_name)
+                        return {
+                            "success": True,
+                            "analytics": analytics_summary,
+                            "project_name": project_name,
+                            "message": "Analytics summary retrieved"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [ANALYTICS] Failed to get analytics summary", error=str(e))
+                        return {"success": False, "error": str(e), "message": "Analytics summary failed"}
+                else:
+                    return {"success": False, "message": "No project name provided"}
+                    
+            elif command == "get-task-analytics":
+                project_name = data.get("project_name")
+                task_text = data.get("task_text")
+                last_n_days = data.get("last_n_days", 30)
+                
+                if project_name:
+                    try:
+                        from analytics import analytics_manager
+                        task_analytics = await analytics_manager.get_task_analytics(
+                            project_name, task_text, last_n_days
+                        )
+                        return {
+                            "success": True,
+                            "analytics": task_analytics,
+                            "project_name": project_name,
+                            "task_text": task_text,
+                            "message": "Task analytics retrieved"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [ANALYTICS] Failed to get task analytics", error=str(e))
+                        return {"success": False, "error": str(e), "message": "Task analytics failed"}
+                else:
+                    return {"success": False, "message": "No project name provided"}
+            
+            # 📊 PHASE 2: NEW ANALYTICS ENDPOINTS FOR DEPLOY SESSIONS AND TIME SAVED
+            elif command == "get-deploy-analytics":
+                project_name = data.get("project_name")
+                last_n_days = data.get("last_n_days", 30)
+                
+                if project_name:
+                    try:
+                        from analytics import analytics_manager
+                        deploy_analytics = await analytics_manager.get_deploy_analytics_summary(
+                            project_name, last_n_days
+                        )
+                        return {
+                            "success": True,
+                            "analytics": deploy_analytics,
+                            "project_name": project_name,
+                            "last_n_days": last_n_days,
+                            "message": "Deploy analytics retrieved"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [ANALYTICS] Failed to get deploy analytics", error=str(e))
+                        return {"success": False, "error": str(e), "message": "Deploy analytics failed"}
+                else:
+                    return {"success": False, "message": "No project name provided"}
+            
+            elif command == "get-session-status":
+                project_name = data.get("project_name")
+                
+                if project_name:
+                    try:
+                        from analytics import analytics_manager
+                        session_id = await analytics_manager.get_active_session_for_project(project_name)
+                        
+                        if session_id:
+                            session = analytics_manager.active_sessions.get(session_id)
+                            if session:
+                                return {
+                                    "success": True,
+                                    "session": {
+                                        "session_id": session.session_id,
+                                        "project_name": session.project_name,
+                                        "deploy_command": session.deploy_command,
+                                        "session_start": session.session_start,
+                                        "timer_duration_seconds": session.timer_duration_seconds,
+                                        "cloud_propagation_time_seconds": session.cloud_propagation_time_seconds,
+                                        "tasks_suggested": session.tasks_suggested,
+                                        "tasks_accepted": session.tasks_accepted,
+                                        "switch_button_pressed": session.switch_button_pressed,
+                                        "switch_timestamp": session.switch_timestamp,
+                                        "session_status": session.session_status
+                                    },
+                                    "project_name": project_name,
+                                    "message": "Active session found"
+                                }
+                        
+                        return {
+                            "success": True,
+                            "session": None,
+                            "project_name": project_name,
+                            "message": "No active session found"
+                        }
+                    except Exception as e:
+                        logger.error("❌ [ANALYTICS] Failed to get session status", error=str(e))
+                        return {"success": False, "error": str(e), "message": "Session status failed"}
+                else:
+                    return {"success": False, "message": "No project name provided"}
+            
+            elif command == "get-productivity-overview":
+                last_n_days = data.get("last_n_days", 7)
+                
+                try:
+                    from analytics import analytics_manager
+                    
+                    # Get all projects with recent activity
+                    projects_root = analytics_manager.projects_root
+                    project_analytics = {}
+                    
+                    for project_dir in projects_root.iterdir():
+                        if project_dir.is_dir() and (project_dir / "analytics").exists():
+                            project_name = project_dir.name.replace("_", " ")
+                            
+                            try:
+                                deploy_analytics = await analytics_manager.get_deploy_analytics_summary(
+                                    project_name, last_n_days
+                                )
+                                if deploy_analytics.get("total_sessions", 0) > 0:
+                                    project_analytics[project_name] = deploy_analytics
+                            except Exception as e:
+                                logger.warning("⚠️ [ANALYTICS] Failed to get analytics for project", 
+                                             project=project_name, error=str(e))
+                    
+                    # Calculate overall metrics
+                    total_time_saved = sum(
+                        p.get("total_time_saved_minutes", 0) for p in project_analytics.values()
+                    )
+                    total_sessions = sum(
+                        p.get("total_sessions", 0) for p in project_analytics.values()
+                    )
+                    avg_switch_rate = sum(
+                        p.get("switch_button_usage_rate", 0) for p in project_analytics.values()
+                    ) / len(project_analytics) if project_analytics else 0.0
+                    
+                    return {
+                        "success": True,
+                        "overview": {
+                            "analysis_period_days": last_n_days,
+                            "total_projects": len(project_analytics),
+                            "total_time_saved_minutes": total_time_saved,
+                            "total_sessions": total_sessions,
+                            "avg_switch_rate": avg_switch_rate,
+                            "projects": project_analytics,
+                            "timestamp": datetime.now().isoformat()
+                        },
+                        "message": "Productivity overview retrieved"
+                    }
+                except Exception as e:
+                    logger.error("❌ [ANALYTICS] Failed to get productivity overview", error=str(e))
+                    return {"success": False, "error": str(e), "message": "Productivity overview failed"}
+            
             # Deploy Simulation for Testing
             elif command == "simulate-deploy":
                 project_name = data.get("project_name", deploybot_state.current_project)

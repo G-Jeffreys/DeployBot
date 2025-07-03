@@ -7,6 +7,7 @@ import DeployStatus from './components/DeployStatus'
 import TimerDisplay from './components/TimerDisplay'
 import ActivityLog from './components/ActivityLog'
 import TestPythonConnection from './components/TestPythonConnection'
+import Analytics from './components/Analytics'
 
 function App() {
   console.log('🚀 [APP] DeployBot App component starting...')
@@ -41,12 +42,16 @@ function App() {
   const [backendStatus, setBackendStatus] = useState('disconnected')
   const [appError, setAppError] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
+  
+  // 📊 PHASE 2: Analytics dashboard navigation state
+  const [activeView, setActiveView] = useState('tasks') // 'tasks' or 'analytics'
 
   console.log('🔄 [APP] Current state:', { 
     selectedProject: selectedProject?.name, 
     deployStatus, 
     isBackendConnected, 
-    backendStatus 
+    backendStatus,
+    activeView  // 📊 PHASE 2: Include analytics view state
   })
 
   // Connection monitoring - MEMORY LEAK FIX: Reduced frequency and better cleanup
@@ -179,6 +184,12 @@ function App() {
     setTimerData(newTimerData)
   }, []) // Empty dependency array since setTimerData is stable
 
+  // 📊 PHASE 2: Handle view navigation
+  const handleViewChange = (view) => {
+    console.log('📊 [APP] Switching to view:', view)
+    setActiveView(view)
+  }
+
   // Get connection status display
   const getConnectionStatus = () => {
     if (isBackendConnected) {
@@ -242,6 +253,30 @@ function App() {
                 🚀 DeployBot
               </h1>
               
+              {/* 📊 PHASE 2: View Navigation */}
+              <div className="flex bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+                <button
+                  onClick={() => handleViewChange('tasks')}
+                  className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                    activeView === 'tasks'
+                      ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+                >
+                  📝 Tasks
+                </button>
+                <button
+                  onClick={() => handleViewChange('analytics')}
+                  className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                    activeView === 'analytics'
+                      ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+                >
+                  📊 Analytics
+                </button>
+              </div>
+              
               {/* Deploy Status */}
               <DeployStatus status={deployStatus} timerData={timerData} />
             </div>
@@ -299,16 +334,25 @@ function App() {
             />
             
             {/* Backend Connection Test */}
-            <TestPythonConnection />
+            <div style={{ display: 'none' }}>
+              <TestPythonConnection />
+            </div>
           </div>
 
-          {/* Center - Task List */}
-          <div className="lg:col-span-6">
-            <TaskList project={selectedProject} />
+          {/* Center - Dynamic Content Based on Active View */}
+          <div className="lg:col-span-9">
+            {/* 📊 PHASE 2: Conditional rendering based on active view */}
+            {activeView === 'tasks' && (
+              <TaskList project={selectedProject} />
+            )}
+            
+            {activeView === 'analytics' && (
+              <Analytics selectedProject={selectedProject} />
+            )}
           </div>
 
           {/* Right Sidebar - Activity Log */}
-          <div className="lg:col-span-3">
+          <div className="lg:col-span-3" style={{ display: 'none' }}>
             <ActivityLog project={selectedProject} />
           </div>
         </div>
@@ -320,6 +364,12 @@ function App() {
           <div className="flex items-center justify-between text-sm text-gray-500 dark:text-gray-400">
             <div>
               DeployBot v1.0.0 - Intelligent Deployment Assistant
+              {/* 📊 PHASE 2: Analytics status indicator */}
+              {activeView === 'analytics' && selectedProject && (
+                <span className="ml-2 text-blue-600 dark:text-blue-400">
+                  • Analytics: {selectedProject.name}
+                </span>
+              )}
             </div>
             <div>
               {new Date().toLocaleString()}

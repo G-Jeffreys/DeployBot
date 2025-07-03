@@ -222,6 +222,7 @@ const CustomNotification = ({ notification, onAction }) => {
               handleAction('snooze', { snooze_minutes: 5 });
             }}
             className="px-2 py-0.5 bg-gray-600 text-white text-xs rounded-full hover:bg-gray-700 transition-colors duration-150 font-medium"
+            style={{ display: 'none' }}
           >
             Snooze
           </button>
@@ -248,6 +249,7 @@ const CustomNotification = ({ notification, onAction }) => {
               handleAction('snooze_5min');
             }}
             className="px-3 py-1 bg-gray-600 text-white text-xs rounded-full hover:bg-gray-700 transition-colors duration-150 font-medium"
+            style={{ display: 'none' }}
           >
             Snooze 5min
           </button>

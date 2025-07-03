@@ -25,13 +25,15 @@ DeployBot is a sophisticated desktop productivity assistant that detects backend
 │ • React Frontend│    Bidirectional │ • AI Task Agent │
 │ • Process Mgmt  │    Communication │ • Deploy Monitor│
 │ • Notifications │                  │ • Timer System  │
+│                 │                  │ • Analytics Eng.│
 └─────────────────┘                  └─────────────────┘
          │                                     │
          │                                     │
     ┌────▼────┐                          ┌────▼────┐
-    │ Projects│                          │File Logs│
-    │ • TODO  │                          │• Deploy │
-    │ • Config│                          │• Activity│
+    │ Projects│                          │Analytics│
+    │ • TODO  │                          │• Suggests│
+    │ • Config│                          │• Interact│
+    │         │                          │• Patterns│
     └─────────┘                          └─────────┘
 ```
 
@@ -39,7 +41,8 @@ DeployBot is a sophisticated desktop productivity assistant that detects backend
 - **Frontend**: Electron 29.1.4 + React 18.2.0 + Tailwind CSS 3.4.3
 - **Backend**: Python 3.12 + LangGraph + OpenAI API + WebSocket Server
 - **Communication**: WebSocket (ws://localhost:8765) with automatic reconnection
-- **Data Layer**: Filesystem-based with JSON configs and markdown task lists
+- **Data Layer**: Filesystem-based with JSON configs, markdown task lists, and analytics data
+- **Analytics Engine**: JSON-based productivity analytics with AI-powered learning
 - **Process Management**: Sophisticated lifecycle management with health monitoring
 
 ---
@@ -279,6 +282,65 @@ class NotificationManager:
 - **Action Handling**: User interaction processing with callbacks
 - **Persistence**: No auto-dismiss - notifications stay until user action
 
+#### **Analytics Engine (`backend/analytics.py` - 420 lines)** 🆕
+**Comprehensive productivity analytics with AI-powered learning:**
+
+```python
+class AnalyticsManager:
+    """JSON-based analytics with zero additional dependencies"""
+    
+    async def record_task_suggestion(self, project_name, task_suggestion):
+        # Record every task suggestion with unique ID and full context
+        # Monthly indexing: projects/{project}/analytics/suggestions_2025-01.json
+        
+    async def record_user_interaction(self, suggestion_id, interaction_type, response_time):
+        # Track user responses: accepted, snoozed, dismissed
+        # Response time measurement to 0.1-second accuracy
+        # Monthly files: projects/{project}/analytics/interactions_2025-01.json
+    
+    async def get_task_analytics(self, project_name, task_text, last_n_days=30):
+        # Return comprehensive task-specific analytics:
+        # - Suggestion count, acceptance rate, ignore patterns
+        # - Recent ignores (3+ = task avoidance learning)
+        # - Average response time, completion patterns
+```
+
+**Analytics Integration Points:**
+- **Task Selection Enhancement**: Analytics data fed into OpenAI prompts for intelligent learning
+- **3+ Ignores Intelligence**: Tasks ignored 3+ times automatically deprioritized
+- **Time-based Completion Detection**: 10+ minutes in target app = likely task completion
+- **WebSocket Analytics API**: Real-time analytics access via `get-analytics-summary` and `get-task-analytics`
+
+**Analytics Data Schema:**
+```json
+// suggestions_2025-01.json
+{
+  "month": "2025-01",
+  "suggestions": [{
+    "id": "suggestion_abc123",
+    "task_text": "Write blog post", 
+    "task_tags": ["#writing", "#short"],
+    "suggested_app": "Bear",
+    "context_data": {
+      "time_of_day": "afternoon",
+      "deploy_active": true,
+      "timer_duration": 1800
+    }
+  }]
+}
+
+// interactions_2025-01.json  
+{
+  "month": "2025-01",
+  "interactions": [{
+    "suggestion_id": "suggestion_abc123",
+    "interaction_type": "accepted",
+    "response_time_seconds": 75.3,
+    "completion_detected": true
+  }]
+}
+```
+
 ### **3. Deploy Wrapper System**
 
 #### **Smart Deploy Wrapper (`backend/deploy_wrapper_setup.py` - 373 lines)**
@@ -424,6 +486,7 @@ DeployBot/
 ├── backend/                        # Python Backend
 │   ├── graph.py                    # LangGraph core (1,221 lines)
 │   ├── tasks.py                    # AI task selection (620 lines)
+│   ├── analytics.py                # Analytics engine (420 lines) 🆕
 │   ├── project_manager.py          # Project CRUD (845 lines)
 │   ├── monitor.py                  # Deploy detection (534 lines)
 │   ├── notification.py             # Notification system (994 lines)
@@ -435,6 +498,9 @@ DeployBot/
 │   └── {ProjectName}/
 │       ├── config.json             # Project configuration
 │       ├── TODO.md                 # Task list with hashtags
+│       ├── analytics/              # Productivity analytics 🆕
+│       │   ├── suggestions_2025-01.json
+│       │   └── interactions_2025-01.json
 │       └── logs/
 │           ├── activity.log        # Activity history
 │           └── deploy_log.txt      # Deploy detection log
@@ -547,9 +613,10 @@ pathlib>=1.0.1
 ## 📊 **Current Status & Metrics**
 
 ### **Implementation Completeness**
-- ✅ **Core Architecture**: Production-ready (42,000+ lines of code)
+- ✅ **Core Architecture**: Production-ready (43,000+ lines of code)
 - ✅ **Deploy Detection**: Sophisticated wrapper system with project awareness
 - ✅ **AI Task Selection**: OpenAI integration with intelligent fallback
+- ✅ **Analytics Engine**: Comprehensive productivity analytics with AI learning 🆕
 - ✅ **WebSocket Communication**: Enterprise-grade with health monitoring
 - ✅ **Project Management**: Full CRUD with custom directory support
 - ✅ **Notification System**: Multi-channel with rich templating

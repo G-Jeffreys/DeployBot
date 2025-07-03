@@ -4,6 +4,8 @@ Timer Module for DeployBot
 
 This module handles deploy wait timers with real-time WebSocket updates
 and integrates with the LangGraph workflow for productivity redirections.
+
+📊 PHASE 2: Enhanced with deploy session analytics tracking
 """
 
 import asyncio
@@ -12,10 +14,16 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Callable, List
 import structlog
 
+# 📊 PHASE 2: Analytics integration
+from analytics import analytics_manager
+
 logger = structlog.get_logger()
 
 class DeployTimer:
-    """Manages deploy wait timers with WebSocket integration"""
+    """
+    Manages deploy wait timers with WebSocket integration
+    📊 PHASE 2: Enhanced with analytics session tracking
+    """
     
     def __init__(self):
         self.active_timers = {}  # project_name -> timer_info
@@ -25,7 +33,10 @@ class DeployTimer:
         self.update_interval = 2.0  # Update every 2 seconds instead of 1
         self.timer_update_task = None
         
-        logger.info("⏰ [TIMER] DeployTimer initialized")
+        # 📊 PHASE 2: Analytics session tracking
+        self.timer_to_session_mapping = {}  # project_name -> session_id
+        
+        logger.info("⏰ [TIMER] DeployTimer initialized with Phase 2 analytics integration")
 
     def add_timer_callback(self, callback: Callable):
         """Add a callback function for timer events"""
@@ -55,8 +66,11 @@ class DeployTimer:
 
     async def start_timer(self, project_name: str, duration_seconds: int = 1800, 
                          deploy_command: Optional[str] = None, custom_config: Optional[Dict[str, Any]] = None) -> bool:
-        """Start a deploy wait timer for a project"""
-        logger.info("🚀 [TIMER] Starting deploy timer", 
+        """
+        Start a deploy wait timer for a project
+        📊 PHASE 2: Enhanced with analytics session tracking
+        """
+        logger.info("🚀 [TIMER] Starting deploy timer with analytics tracking", 
                    project_name=project_name, 
                    duration_seconds=duration_seconds,
                    deploy_command=deploy_command)
@@ -68,6 +82,13 @@ class DeployTimer:
             
             start_time = time.time()
             end_time = start_time + duration_seconds
+            
+            # 📊 PHASE 2: Start analytics session
+            session_id = await analytics_manager.start_deploy_session(
+                project_name=project_name,
+                deploy_command=deploy_command or f"Timer started for {project_name}",
+                timer_duration_seconds=duration_seconds
+            )
             
             # Create timer info
             timer_info = {
@@ -83,10 +104,14 @@ class DeployTimer:
                 "grace_period_used": False,
                 "paused": False,
                 "pause_time": None,
-                "pause_duration": 0
+                "pause_duration": 0,
+                "session_id": session_id  # 📊 PHASE 2: Link to analytics session
             }
             
             self.active_timers[project_name] = timer_info
+            
+            # 📊 PHASE 2: Store timer to session mapping
+            self.timer_to_session_mapping[project_name] = session_id
             
             # Start the update loop if not already running
             if not self.timer_update_task:
@@ -98,8 +123,9 @@ class DeployTimer:
             # Send WebSocket update
             await self._send_websocket_update(timer_info)
             
-            logger.info("✅ [TIMER] Timer started successfully", 
+            logger.info("✅ [TIMER] Timer started successfully with analytics session", 
                        project_name=project_name,
+                       session_id=session_id,
                        end_time=datetime.fromtimestamp(end_time).isoformat())
             return True
             
@@ -109,8 +135,11 @@ class DeployTimer:
             return False
 
     async def stop_timer(self, project_name: str, reason: str = "manual") -> bool:
-        """Stop a running timer"""
-        logger.info("🛑 [TIMER] Stopping timer", 
+        """
+        Stop a running timer
+        📊 PHASE 2: Enhanced with analytics session completion
+        """
+        logger.info("🛑 [TIMER] Stopping timer with analytics session completion", 
                    project_name=project_name, reason=reason)
         
         if project_name not in self.active_timers:
@@ -129,6 +158,17 @@ class DeployTimer:
                 current_time = time.time()
                 timer_info["remaining_seconds"] = max(0, timer_info["end_time"] - current_time)
             
+            # 📊 PHASE 2: End analytics session
+            session_id = timer_info.get("session_id")
+            if session_id:
+                # Determine session status based on timer completion
+                session_status = "completed" if reason == "expired" else "cancelled"
+                await analytics_manager.end_deploy_session(session_id, session_status)
+                
+                # Remove from mapping
+                if project_name in self.timer_to_session_mapping:
+                    del self.timer_to_session_mapping[project_name]
+            
             # Notify callbacks
             await self._notify_timer_event("timer_stopped", timer_info)
             
@@ -143,8 +183,9 @@ class DeployTimer:
                 self.timer_update_task.cancel()
                 self.timer_update_task = None
             
-            logger.info("✅ [TIMER] Timer stopped successfully", 
-                       project_name=project_name)
+            logger.info("✅ [TIMER] Timer stopped successfully with analytics session ended", 
+                       project_name=project_name,
+                       session_id=session_id)
             return True
             
         except Exception as e:
@@ -306,11 +347,23 @@ class DeployTimer:
                 await asyncio.sleep(self.update_interval * 2)
 
     async def _handle_timer_expiry(self, project_name: str):
-        """Handle timer expiry"""
-        logger.info("⏰ [TIMER] Timer expired", project_name=project_name)
+        """
+        Handle timer expiry
+        📊 PHASE 2: Enhanced with analytics session completion
+        """
+        logger.info("⏰ [TIMER] Timer expired with analytics tracking", project_name=project_name)
         
         timer_info = self.active_timers[project_name]
         timer_info["expired_at"] = datetime.now().isoformat()
+        
+        # 📊 PHASE 2: End analytics session as completed
+        session_id = timer_info.get("session_id")
+        if session_id:
+            await analytics_manager.end_deploy_session(session_id, "completed")
+            
+            # Remove from mapping
+            if project_name in self.timer_to_session_mapping:
+                del self.timer_to_session_mapping[project_name]
         
         # Notify callbacks
         await self._notify_timer_event("timer_expired", timer_info)
@@ -456,6 +509,36 @@ class DeployTimer:
         self.websocket_clients.clear()
         
         logger.info("✅ [TIMER] Timer cleanup completed")
+
+    # 📊 PHASE 2: NEW ANALYTICS INTEGRATION METHODS
+    
+    async def get_session_id_for_project(self, project_name: str) -> Optional[str]:
+        """
+        📊 PHASE 2: Get the analytics session ID for an active timer
+        """
+        return self.timer_to_session_mapping.get(project_name)
+    
+    async def record_task_suggestion_for_timer(self, project_name: str, tasks_suggested: int = 1) -> bool:
+        """
+        📊 PHASE 2: Record task suggestions for the timer's analytics session
+        """
+        session_id = await self.get_session_id_for_project(project_name)
+        if session_id:
+            return await analytics_manager.update_session_task_counts(
+                session_id, tasks_suggested=tasks_suggested
+            )
+        return False
+    
+    async def record_task_acceptance_for_timer(self, project_name: str, tasks_accepted: int = 1) -> bool:
+        """
+        📊 PHASE 2: Record task acceptances for the timer's analytics session  
+        """
+        session_id = await self.get_session_id_for_project(project_name)
+        if session_id:
+            return await analytics_manager.update_session_task_counts(
+                session_id, tasks_accepted=tasks_accepted
+            )
+        return False
 
 # Global instance
 deploy_timer = DeployTimer() 

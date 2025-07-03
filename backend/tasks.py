@@ -56,8 +56,13 @@ class TaskSelector:
         # Initialize OpenAI if available
         self._initialize_openai()
         
+        # Initialize analytics integration
+        from analytics import analytics_manager
+        self.analytics = analytics_manager
+        
         logger.info("🎯 [TASKS] TaskSelector initialized", 
-                   openai_enabled=self.openai_client is not None)
+                   openai_enabled=self.openai_client is not None,
+                   analytics_enabled=True)
     
     def _initialize_openai(self):
         """Initialize OpenAI client with API key"""
@@ -270,6 +275,7 @@ class TaskSelector:
         """
         Select the best alternative task for the current context
         Uses LLM if available, falls back to heuristic selection
+        Now enhanced with analytics-driven learning
         """
         logger.info("🎯 [TASKS] Selecting best task for context", 
                    project_path=project_path, context=context)
@@ -296,12 +302,34 @@ class TaskSelector:
             logger.warning("⚠️ [TASKS] No suitable tasks after filtering")
             return None
         
+        # 📊 ANALYTICS ENHANCEMENT: Load analytics data for intelligent selection
+        project_name = context.get('project_name', Path(project_path).name)
+        analytics_data = await self.analytics.get_task_analytics(project_name)
+        
+        # Ensure analytics_data is never None
+        if analytics_data is None:
+            analytics_data = {}
+        
+        logger.info("📊 [TASKS] Analytics data loaded for task selection", 
+                   project=project_name,
+                   suggestions_count=analytics_data.get('suggestions_count', 0),
+                   acceptance_rate=analytics_data.get('acceptance_rate', 0.0))
+        
         # Try LLM selection first, fallback to heuristic
         if self.openai_client and context.get("use_llm", True):
             try:
-                selected_task = await self._select_task_with_llm(filtered_tasks, context)
+                selected_task = await self._select_task_with_llm(filtered_tasks, context, analytics_data)
                 if selected_task:
                     logger.info("✅ [TASKS] Task selected using LLM", task=selected_task['text'])
+                    
+                    # 📊 ANALYTICS: Record task suggestion
+                    suggestion_id = await self.analytics.record_task_suggestion(
+                        selected_task, project_name, context
+                    )
+                    
+                    # Store suggestion ID for interaction tracking
+                    selected_task['suggestion_id'] = suggestion_id
+                    
                     return selected_task
             except Exception as e:
                 logger.warning("⚠️ [TASKS] LLM selection failed, using heuristic fallback", error=str(e))
@@ -309,6 +337,15 @@ class TaskSelector:
         # Heuristic fallback selection
         selected_task = self._select_task_heuristic(filtered_tasks, context)
         logger.info("✅ [TASKS] Task selected using heuristic method", task=selected_task['text'])
+        
+        # 📊 ANALYTICS: Record task suggestion (heuristic)
+        suggestion_id = await self.analytics.record_task_suggestion(
+            selected_task, project_name, context
+        )
+        
+        # Store suggestion ID for interaction tracking
+        selected_task['suggestion_id'] = suggestion_id
+        
         return selected_task
 
     def _filter_tasks_by_context(self, tasks: List[Dict[str, Any]], context: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -366,7 +403,7 @@ class TaskSelector:
         
         return filtered
 
-    async def _select_task_with_llm(self, tasks: List[Dict[str, Any]], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _select_task_with_llm(self, tasks: List[Dict[str, Any]], context: Dict[str, Any], analytics_data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """Use OpenAI to intelligently select the best task"""
         logger.info("🤖 [TASKS] Using LLM for task selection", task_count=len(tasks))
         
@@ -387,10 +424,16 @@ class TaskSelector:
         context_str = self._format_context_for_llm(context)
         tasks_str = self._format_tasks_for_llm(tasks)
         
+        # 📊 ANALYTICS ENHANCEMENT: Build analytics context for LLM
+        analytics_context = self._build_analytics_context_for_llm(tasks, analytics_data or {})
+        
         prompt = f"""You are DeployBot, an AI assistant that helps developers stay productive during deployment wait times.
 
 CONTEXT:
 {context_str}
+
+📊 HISTORICAL ANALYTICS:
+{analytics_context}
 
 AVAILABLE TASKS:
 {tasks_str}
@@ -401,12 +444,16 @@ Select the SINGLE best task for this situation. Consider:
 2. Time available ({context.get('timer_duration', 1800)} seconds)
 3. Current time of day
 4. Task priority and difficulty
-5. What would be most productive right now
+5. Historical acceptance patterns (avoid tasks ignored 3+ times recently)
+6. What would be most productive right now
+
+Use the historical analytics to avoid suggesting tasks that have been repeatedly ignored.
+If a task type has low acceptance rates, prefer alternatives unless there are no other options.
 
 Respond with ONLY a JSON object:
 {{
     "selected_task": "exact task text here",
-    "reasoning": "brief explanation why this is the best choice",
+    "reasoning": "brief explanation why this is the best choice considering historical patterns",
     "confidence": 0.8
 }}"""
 
@@ -582,6 +629,48 @@ Respond with ONLY a JSON object:
             lines.append("")
         
         return '\n'.join(lines)
+    
+    def _build_analytics_context_for_llm(self, tasks: List[Dict[str, Any]], analytics_data: Dict[str, Any]) -> str:
+        """
+        Build analytics context string for LLM prompts
+        📊 ANALYTICS ENHANCEMENT: Provides historical data to improve task selection
+        """
+        context_lines = []
+        
+        # Overall project analytics
+        if analytics_data.get('suggestions_count', 0) > 0:
+            acceptance_rate = analytics_data.get('acceptance_rate', 0.0)
+            context_lines.append(f"- Overall task acceptance rate: {acceptance_rate:.0%}")
+        
+        # Recent ignore patterns (key feature from requirements)
+        recent_ignores = analytics_data.get('recent_ignores_30d', 0)
+        if recent_ignores >= 3:
+            context_lines.append(f"- Warning: {recent_ignores} tasks ignored in last 30 days - consider different approach")
+        
+        # Task completion patterns
+        task_patterns = analytics_data.get('task_patterns', {})
+        if task_patterns.get('total_completed', 0) > 0:
+            avg_completion_time = task_patterns.get('avg_completion_time', 0)
+            if avg_completion_time > 0:
+                context_lines.append(f"- Average task completion time: {avg_completion_time/60:.1f} minutes")
+            
+            avg_productivity = task_patterns.get('avg_productivity_score', 0)
+            if avg_productivity > 0:
+                context_lines.append(f"- Average productivity score: {avg_productivity:.2f}/1.0")
+        
+        # Response time patterns
+        avg_response_time = analytics_data.get('avg_response_time', 0)
+        if avg_response_time > 0:
+            if avg_response_time < 30:
+                context_lines.append("- User typically responds quickly to suggestions")
+            elif avg_response_time > 120:
+                context_lines.append("- User typically takes time to consider suggestions")
+        
+        # Provide guidance if no patterns yet
+        if not context_lines:
+            context_lines.append("- No significant historical patterns yet - focus on task priority and context")
+        
+        return '\n'.join(context_lines)
 
     async def get_task_statistics(self, project_path: str) -> Dict[str, Any]:
         """Get statistics about tasks in the project"""

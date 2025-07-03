@@ -7,6 +7,8 @@ This module handles:
 - In-app modal coordination through WebSocket communication
 - Notification preferences and user response handling
 - Cross-platform notification support (macOS focus)
+
+📊 PHASE 2: Enhanced with Switch button analytics tracking for time saved calculation
 """
 
 import asyncio
@@ -30,6 +32,9 @@ try:
 except ImportError:
     PYNC_AVAILABLE = False
     logger.warning("⚠️ [NOTIFY] pync library not available - using fallback notifications")
+
+# 📊 PHASE 2: Analytics integration for Switch tracking
+from analytics import analytics_manager
 
 class NotificationManager:
     """Comprehensive notification system for DeployBot"""
@@ -93,9 +98,19 @@ class NotificationManager:
         self.active_notifications = {}  # notification_id -> notification_data
         self.notification_responses = {}  # notification_id -> user_response
         
-        logger.info("🔔 [NOTIFY] NotificationManager initialized", 
+        # 📊 ANALYTICS INTEGRATION: Track notification display times for response time calculation
+        self.notification_display_times = {}  # notification_id -> display_timestamp
+        
+        # Initialize analytics integration (already imported above)
+        self.analytics = analytics_manager
+        
+        # 📊 PHASE 2: Switch tracking for time saved analytics
+        self.switch_tracking_enabled = True
+        
+        logger.info("🔔 [NOTIFY] NotificationManager initialized with Phase 2 Switch tracking", 
                    system_notifications=PYNC_AVAILABLE,
-                   templates=len(self.templates))
+                   templates=len(self.templates),
+                   analytics_enabled=True)
 
     def set_websocket_server(self, websocket_server):
         """Set the WebSocket server for communication with frontend"""
@@ -243,6 +258,9 @@ class NotificationManager:
         
         # Store in active notifications
         self.active_notifications[notification_id] = notification
+        
+        # 📊 ANALYTICS: Record notification display time for response time tracking
+        self.notification_display_times[notification_id] = time.time()
         
         # Add to history
         self._add_to_history(notification)
@@ -502,15 +520,25 @@ You can delete this file after reading the notification.
             return False
         
         notification = self.active_notifications[notification_id]
+        response_timestamp = time.time()
+        
+        # 📊 ANALYTICS: Calculate response time
+        display_time = self.notification_display_times.get(notification_id, response_timestamp)
+        response_time_seconds = response_timestamp - display_time
+        
         response_data = {
             "notification_id": notification_id,
             "action": action,
             "timestamp": datetime.now().isoformat(),
+            "response_time_seconds": response_time_seconds,
             "additional_data": additional_data or {}
         }
         
         # Store response
         self.notification_responses[notification_id] = response_data
+        
+        # 📊 ANALYTICS: Record user interaction if this is a task suggestion
+        await self._record_interaction_analytics(notification, action, response_time_seconds, additional_data or {})
         
         # Process the response based on action
         await self._process_notification_action(notification, action, additional_data or {})
@@ -518,12 +546,15 @@ You can delete this file after reading the notification.
         # Remove from active notifications unless it's a snooze
         if action not in ["snooze", "snooze_5min", "snooze_10min"]:
             self.active_notifications.pop(notification_id, None)
+            # Clean up display time tracking
+            self.notification_display_times.pop(notification_id, None)
         
         # Notify callbacks
         await self._notify_callbacks("notification_response", response_data)
         
         logger.info("✅ [NOTIFY] Notification response processed", 
-                   notification_id=notification_id, action=action)
+                   notification_id=notification_id, action=action,
+                   response_time=f"{response_time_seconds:.1f}s")
         
         return True
 
@@ -568,11 +599,25 @@ You can delete this file after reading the notification.
                         action=action, error=str(e))
 
     async def _handle_task_switch(self, notification: Dict[str, Any], additional_data: Dict[str, Any]):
-        """Handle task switching action"""
+        """
+        Handle task switching action
+        📊 PHASE 2: Enhanced with Switch button analytics tracking
+        """
         
         task_data = notification["data"]["task"]
         project_name = notification["data"]["project_name"]
         original_context = notification["data"].get("context", {})
+        
+        # 📊 PHASE 2: Record Switch button press for time saved calculation
+        logger.info("🔀 [NOTIFY] Recording Switch button press for analytics", 
+                   project=project_name, task=task_data.get('text', ''))
+        
+        # Get active session for this project
+        session_id = await analytics_manager.get_active_session_for_project(project_name)
+        if session_id:
+            await analytics_manager.record_switch_button_press(session_id, project_name)
+        else:
+            logger.warning("⚠️ [NOTIFY] No active session found for Switch tracking", project=project_name)
         
         # Build enhanced context with required fields for redirection
         context = {
@@ -583,74 +628,27 @@ You can delete this file after reading the notification.
             "redirect_reason": "notification_task_switch"
         }
         
-        # PHASE 1 ENHANCED: If project_path is missing, use ProjectDirectoryManager to resolve it
-        if not context["project_path"]:
-            try:
-                from project_directory_manager import project_directory_manager
-                import asyncio
-                
-                # Try to resolve project path using directory manager
-                try:
-                    loop = asyncio.get_event_loop()
-                    if not loop.is_running():
-                        resolved_path = loop.run_until_complete(
-                            project_directory_manager.get_project_path(project_name)
-                        )
-                        if resolved_path:
-                            context["project_path"] = resolved_path
-                            logger.info("✅ [NOTIFY] Resolved project path using directory manager", 
-                                       project_name=project_name, 
-                                       project_path=context["project_path"])
-                        else:
-                            # Fallback to constructed path
-                            from pathlib import Path
-                            projects_root = Path(__file__).parent.parent / "projects"
-                            safe_project_name = project_name.replace(" ", "_").replace("-", "_")
-                            context["project_path"] = str(projects_root / safe_project_name)
-                            logger.info("🔄 [NOTIFY] Used fallback project path construction", 
-                                       project_name=project_name, 
-                                       project_path=context["project_path"])
-                    else:
-                        # Already in async context, use fallback
-                        from pathlib import Path
-                        projects_root = Path(__file__).parent.parent / "projects"
-                        safe_project_name = project_name.replace(" ", "_").replace("-", "_")
-                        context["project_path"] = str(projects_root / safe_project_name)
-                        logger.info("🔄 [NOTIFY] Used fallback method in async context", 
-                                   project_name=project_name, 
-                                   project_path=context["project_path"])
-                except Exception as e:
-                    logger.debug("🔄 [NOTIFY] Could not resolve with directory manager", error=str(e))
-                    # Fallback to constructed path
-                    from pathlib import Path
-                    projects_root = Path(__file__).parent.parent / "projects"
-                    safe_project_name = project_name.replace(" ", "_").replace("-", "_")
-                    context["project_path"] = str(projects_root / safe_project_name)
-                    logger.info("🔄 [NOTIFY] Used fallback project path construction", 
-                               project_name=project_name, 
-                               project_path=context["project_path"])
-            except Exception as e:
-                logger.debug("🔄 [NOTIFY] Directory manager not available", error=str(e))
-                # Final fallback to old method
-                from pathlib import Path
-                projects_root = Path(__file__).parent.parent / "projects"
-                safe_project_name = project_name.replace(" ", "_").replace("-", "_")
-                context["project_path"] = str(projects_root / safe_project_name)
-                logger.info("🔄 [NOTIFY] Used legacy project path construction", 
-                           project_name=project_name, 
-                           project_path=context["project_path"])
-        
-        logger.info("🔀 [NOTIFY] Processing task switch request", 
+        logger.info("🔀 [NOTIFY] Processing task switch request with analytics tracking", 
                    task=task_data.get('text', ''), 
                    app=task_data.get('app', ''),
                    context_project_path=context.get("project_path"),
-                   has_project_path=bool(context.get("project_path")))
+                   has_project_path=bool(context.get("project_path")),
+                   session_id=session_id)
         
         # Import redirect module to handle app opening
         from . import redirect
         
         # Perform the redirection
         redirect_result = await redirect.app_redirector.redirect_to_task(task_data, context)
+        
+        # 📊 PHASE 2: Record task acceptance for session analytics
+        if redirect_result.get("success", False):
+            # Import timer module to record task acceptance
+            from . import timer
+            await timer.deploy_timer.record_task_acceptance_for_timer(project_name, 1)
+            
+            logger.info("✅ [NOTIFY] Switch button press and task acceptance recorded in analytics", 
+                       project=project_name, session_id=session_id)
         
         # Notify frontend of redirection result
         if self.websocket_server:
@@ -661,6 +659,8 @@ You can delete this file after reading the notification.
                     "task": task_data,
                     "redirect_result": redirect_result,
                     "project_name": project_name,
+                    "session_id": session_id,  # 📊 PHASE 2: Include session info
+                    "switch_recorded": True,   # 📊 PHASE 2: Indicate Switch was recorded
                     "timestamp": datetime.now().isoformat()
                 }
             })
@@ -933,6 +933,64 @@ You can delete this file after reading the notification.
         
         logger.info("🗑️ [NOTIFY] All notifications dismissed", count=count)
         return count
+
+    async def _record_interaction_analytics(self, notification: Dict[str, Any], action: str, 
+                                           response_time_seconds: float, additional_data: Dict[str, Any]):
+        """
+        📊 ANALYTICS: Record user interaction with task suggestion notifications
+        """
+        try:
+            # Only record analytics for task suggestion notifications
+            notification_type = notification["data"].get("type")
+            if notification_type not in ["task_suggestion", "unified_suggestion"]:
+                return
+            
+            # Extract suggestion ID and project info
+            suggestion_id = None
+            project_name = notification["data"].get("project_name", "Unknown")
+            
+            # Check if task has suggestion_id from TaskSelector
+            task_data = notification["data"].get("task", {})
+            if task_data and "suggestion_id" in task_data:
+                suggestion_id = task_data["suggestion_id"]
+            else:
+                # Fallback: try to extract from notification data
+                suggestion_id = notification["data"].get("suggestion_id")
+            
+            if not suggestion_id:
+                logger.warning("⚠️ [ANALYTICS] No suggestion_id found for interaction tracking")
+                return
+            
+            # Map notification actions to analytics interaction types
+            interaction_type_mapping = {
+                "switch_now": "accepted",
+                "switch_to_task": "accepted", 
+                "snooze": "snoozed",
+                "snooze_5min": "snoozed",
+                "snooze_10min": "snoozed",
+                "dismiss": "dismissed"
+            }
+            
+            interaction_type = interaction_type_mapping.get(action, "ignored")
+            
+            # Record the interaction
+            await self.analytics.record_user_interaction(
+                suggestion_id=suggestion_id,
+                interaction_type=interaction_type,
+                response_time_seconds=response_time_seconds,
+                project_name=project_name,
+                additional_data=additional_data
+            )
+            
+            logger.info("📊 [ANALYTICS] User interaction recorded", 
+                       suggestion_id=suggestion_id,
+                       interaction_type=interaction_type,
+                       project=project_name,
+                       response_time=f"{response_time_seconds:.1f}s")
+            
+        except Exception as e:
+            logger.error("❌ [ANALYTICS] Failed to record interaction", 
+                        error=str(e), action=action)
 
     def update_preferences(self, new_preferences: Dict[str, Any]):
         """Update notification preferences"""
