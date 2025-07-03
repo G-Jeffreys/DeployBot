@@ -119,11 +119,30 @@ const DirectoryPicker = ({
    */
   const handleBrowseDirectory = async () => {
     console.log('📂 [DIRECTORY_PICKER] Opening directory browser...')
+    console.log('📂 [DIRECTORY_PICKER] electronAPI available:', !!window.electronAPI)
+    console.log('📂 [DIRECTORY_PICKER] fileSystem available:', !!window.electronAPI?.fileSystem)
+    console.log('📂 [DIRECTORY_PICKER] selectDirectory available:', !!window.electronAPI?.fileSystem?.selectDirectory)
+    
+    // Clear any previous errors
+    setError(null)
     
     try {
-      const result = await window.electronAPI?.fileSystem.selectDirectory({
+      if (!window.electronAPI) {
+        throw new Error('electronAPI not available')
+      }
+      
+      if (!window.electronAPI.fileSystem) {
+        throw new Error('fileSystem API not available')
+      }
+      
+      if (!window.electronAPI.fileSystem.selectDirectory) {
+        throw new Error('selectDirectory method not available')
+      }
+      
+      console.log('📂 [DIRECTORY_PICKER] Calling selectDirectory with options...')
+      const result = await window.electronAPI.fileSystem.selectDirectory({
         title: 'Select Project Directory',
-        defaultPath: selectedPath || process.env.HOME,
+        defaultPath: selectedPath || undefined,
         message: 'Choose a directory where your project will be stored'
       })
       
@@ -142,10 +161,15 @@ const DirectoryPicker = ({
         
         // Validate the selected directory
         await validateDirectory(newPath)
+      } else if (result?.canceled) {
+        console.log('📂 [DIRECTORY_PICKER] Directory selection canceled by user')
+      } else {
+        console.log('📂 [DIRECTORY_PICKER] Directory selection failed:', result)
+        setError(`Directory selection failed: ${result?.error || 'Unknown error'}`)
       }
     } catch (error) {
       console.error('❌ [DIRECTORY_PICKER] Failed to browse directory:', error)
-      setError('Failed to open directory browser')
+      setError(`Failed to open directory browser: ${error.message}`)
     }
   }
 
