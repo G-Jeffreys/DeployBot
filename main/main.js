@@ -1,6 +1,6 @@
 const { app, BrowserWindow, globalShortcut, ipcMain, dialog } = require('electron');
 const path = require('path');
-const fs = require('fs').promises;
+const fs = require('fs');
 const log = require('electron-log');
 const ProcessManager = require('./process_manager');
 
@@ -19,6 +19,25 @@ let notificationWindows = new Map(); // notification_id -> BrowserWindow
 let notificationQueue = [];
 let maxNotifications = 3;
 let notificationSpacing = 10; // pixels between notifications
+
+/**
+ * Get the correct icon path for both development and production
+ */
+function getIconPath() {
+  // In production (packaged app), check for icon in resources
+  if (!isDev && process.resourcesPath) {
+    const resourceIcon = path.join(process.resourcesPath, 'icon.png');
+    if (fs.existsSync(resourceIcon)) {
+      console.log('🖼️ [MAIN] Using resource icon:', resourceIcon);
+      return resourceIcon;
+    }
+  }
+  
+  // Fallback to relative path (development or if resource icon not found)
+  const fallbackIcon = path.join(__dirname, '../assets/icon.png');
+  console.log('🖼️ [MAIN] Using fallback icon:', fallbackIcon);
+  return fallbackIcon;
+}
 
 /**
  * Create the main application window with robust process management
@@ -47,7 +66,7 @@ function createWindow() {
     },
     titleBarStyle: 'hiddenInset', // macOS style
     show: false, // Don't show until ready
-    icon: path.join(__dirname, '../assets/icon.png')
+    icon: getIconPath()
   });
 
   // Load the renderer

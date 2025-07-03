@@ -16,14 +16,15 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:3000 && NODE_ENV=development electron .",
     "build": "vite build",
-    "build:electron": "npm run build && electron-builder",
-    "build:all": "npm run build && electron-builder --mac --win --linux",
+    "build:electron": "npm run setup:python && npm run build && electron-builder",
+    "build:all": "npm run setup:python && npm run build && electron-builder --mac --win --linux",
+    "setup:python": "node scripts/setup_python_runtime.js",
     "start": "electron .",
     "preview": "vite preview",
     "release": "scripts/release.sh",
     "test": "echo \"Run npm run test:python for backend tests\"",
     "test:python": "cd langgraph && python -m pytest tests/ || echo \"Python tests require setup\"",
-    "clean": "rm -rf dist/ node_modules/.vite/ && npm install",
+    "clean": "rm -rf dist/ node_modules/.vite/ python_runtime/ && npm install",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
@@ -42,6 +43,7 @@
   },
   "license": "MIT",
   "devDependencies": {
+    "@bjia56/portable-python-3.12": "^0.1.38",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
@@ -71,7 +73,7 @@
     },
     "files": [
       "main/**/*",
-      "dist/**/*", 
+      "dist/**/*",
       "backend/**/*",
       "requirements.txt",
       "!**/*.pyc",
@@ -86,12 +88,24 @@
       "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
       "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
       "!**/{appveyor.yml,.travis.yml,circle.yml}",
-      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}",
+      "!python_bundle/**",
+      "!deploybot-env/**",
+      "!logs/**",
+      "!docs/**"
     ],
     "extraResources": [
       {
         "from": "requirements.txt",
         "to": "requirements.txt"
+      },
+      {
+        "from": "python_runtime/",
+        "to": "python"
+      },
+      {
+        "from": "assets/icon.png",
+        "to": "icon.png"
       }
     ],
     "mac": {

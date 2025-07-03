@@ -212,17 +212,27 @@ class ProcessManager extends EventEmitter {
       
       // Determine Python executable with fallbacks
       let pythonExecutable;
+
+      // First, attempt to use an embedded Python runtime that is shipped with the packaged application
+      const embeddedPython = process.platform === 'win32'
+        ? path.join(process.resourcesPath, 'python', 'python.exe')
+        : path.join(process.resourcesPath, 'python', 'bin', 'python3');
+      if (fs.existsSync(embeddedPython)) {
+        pythonExecutable = embeddedPython;
+        console.log(`🐍 [PROCESS_MANAGER] Using embedded Python runtime: ${pythonExecutable}`);
+      }
+
       const virtualEnvPython = path.join(__dirname, '../deploybot-env/bin/python3');
       const systemPython3 = 'python3';
-      
-      if (fs.existsSync(virtualEnvPython)) {
+
+      if (!pythonExecutable && fs.existsSync(virtualEnvPython)) {
         pythonExecutable = virtualEnvPython;
         console.log(`🐍 [PROCESS_MANAGER] Using virtual environment Python: ${pythonExecutable}`);
-      } else {
+      } else if (!pythonExecutable) {
         // Fallback to system python3
         pythonExecutable = systemPython3;
         console.log(`🐍 [PROCESS_MANAGER] Using system Python3: ${pythonExecutable}`);
-        console.log(`⚠️ [PROCESS_MANAGER] Virtual environment not found at: ${virtualEnvPython}`);
+        console.log(`⚠️ [PROCESS_MANAGER] Embedded and virtual environment Pythons not found; falling back to system Python3`);
       }
       
       // Verify Python script exists
