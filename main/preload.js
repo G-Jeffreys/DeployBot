@@ -44,6 +44,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.log('📁 [PRELOAD] Listing projects');
       return ipcRenderer.invoke('python-command', 'project-list', {});
     },
+
+    // Custom directory management - NEW Phase 2 APIs
+    validateCustomDirectory: (directoryPath) => {
+      console.log('📂 [PRELOAD] Validating custom directory:', directoryPath);
+      return ipcRenderer.invoke('python-command', 'validate-custom-directory', { directory_path: directoryPath });
+    },
+
+    migrateExistingProjects: () => {
+      console.log('🔄 [PRELOAD] Migrating existing projects to directory mapping system');
+      return ipcRenderer.invoke('python-command', 'migrate-existing-projects', {});
+    },
+
+    listProjectMappings: () => {
+      console.log('📋 [PRELOAD] Getting project directory mappings');
+      return ipcRenderer.invoke('python-command', 'list-project-mappings', {});
+    },
+
+    resolveProjectPath: (projectName) => {
+      console.log('🔍 [PRELOAD] Resolving project path:', projectName);
+      return ipcRenderer.invoke('python-command', 'resolve-project-path', { project_name: projectName });
+    },
   },
 
   // Task management - NEW
@@ -109,6 +130,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
+  // Backend communication - CRITICAL FIX: Add missing backend API
+  backend: {
+    ping: () => {
+      console.log('📡 [PRELOAD] Pinging backend connection');
+      return ipcRenderer.invoke('python-command', 'ping', {});
+    },
+    
+    status: () => {
+      console.log('📊 [PRELOAD] Getting backend status');
+      return ipcRenderer.invoke('python-command', 'ping', {});
+    },
+  },
+
   // Deploy wrapper management - NEW
   wrapper: {
     status: () => {
@@ -145,6 +179,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     focus: () => {
       console.log('🔍 [PRELOAD] Requesting window focus');
       return ipcRenderer.invoke('window-focus');
+    },
+  },
+
+  // File system utilities - NEW Phase 2
+  fileSystem: {
+    selectDirectory: (options = {}) => {
+      console.log('📂 [PRELOAD] Opening directory selection dialog:', options);
+      return ipcRenderer.invoke('select-directory', options);
+    },
+
+    checkDirectoryExists: (directoryPath) => {
+      console.log('📁 [PRELOAD] Checking if directory exists:', directoryPath);
+      return ipcRenderer.invoke('check-directory-exists', directoryPath);
+    },
+
+    getDirectoryInfo: (directoryPath) => {
+      console.log('📊 [PRELOAD] Getting directory information:', directoryPath);
+      return ipcRenderer.invoke('get-directory-info', directoryPath);
     },
   },
 

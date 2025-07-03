@@ -191,7 +191,7 @@ class ProcessManager extends EventEmitter {
         // Copy backend files
         const backendFiles = [
           'graph.py', 'logger.py', 'monitor.py', 'notification.py',
-          'project_manager.py', 'redirect.py', 'tasks.py', 'timer.py',
+          'project_manager.py', 'project_directory_manager.py', 'redirect.py', 'tasks.py', 'timer.py',
           'deploy_wrapper_setup.py'
         ];
         
@@ -521,20 +521,20 @@ class ProcessManager extends EventEmitter {
   }
 
   /**
-   * Start health monitoring
+   * Start health monitoring for active connections
    */
   startHealthMonitoring() {
     if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
+      console.log('⚠️ [PROCESS_MANAGER] Health monitoring already active');
+      return;
     }
     
     console.log('❤️ [PROCESS_MANAGER] Starting health monitoring...');
     
+    // MEMORY LEAK FIX: Increased interval from 15 seconds to 30 seconds to reduce load
     this.healthCheckTimer = setInterval(() => {
-      if (this.state.connection === 'connected') {
-        this.sendPing();
-      }
-    }, this.config.healthCheckInterval);
+      this.performHealthCheck();
+    }, 30000); // Check every 30 seconds instead of 15
   }
 
   /**
@@ -542,9 +542,39 @@ class ProcessManager extends EventEmitter {
    */
   stopHealthMonitoring() {
     if (this.healthCheckTimer) {
-      console.log('❤️ [PROCESS_MANAGER] Stopping health monitoring...');
+      console.log('🧹 [PROCESS_MANAGER] Stopping health monitoring...');
       clearInterval(this.healthCheckTimer);
       this.healthCheckTimer = null;
+    }
+  }
+
+  /**
+   * Perform health check on active connections
+   */
+  async performHealthCheck() {
+    if (!this.wsConnection || this.wsConnection.readyState !== WebSocket.OPEN) {
+      console.log('💔 [PROCESS_MANAGER] Health check failed - no active connection');
+      this.handleConnectionError(new Error('Connection lost during health check'));
+      return;
+    }
+
+    try {
+      // CRITICAL FIX: Use same format as sendPing() - backend expects 'command' not 'type'
+      const healthCheck = {
+        command: 'ping',  // Changed from 'type' to 'command'
+        data: { 
+          timestamp: new Date().toISOString(),
+          healthCheck: true  // Mark as health check
+        }
+      };
+      
+      console.log('💗 [PROCESS_MANAGER] Sending health check ping...');
+      this.wsConnection.send(JSON.stringify(healthCheck));
+      
+      // Note: Pong response is handled in the message handler
+    } catch (error) {
+      console.error('❌ [PROCESS_MANAGER] Health check failed:', error.message);
+      this.handleConnectionError(error);
     }
   }
 
@@ -589,7 +619,7 @@ class ProcessManager extends EventEmitter {
   }
 
   /**
-   * Comprehensive shutdown with proper cleanup order
+   * Clean shutdown of all processes and connections
    */
   async shutdown() {
     if (this.isShuttingDown) {
@@ -598,24 +628,23 @@ class ProcessManager extends EventEmitter {
     }
     
     this.isShuttingDown = true;
-    console.log('🛑 [PROCESS_MANAGER] Starting comprehensive shutdown...');
+    this.state.backend = 'stopping';
+    this.state.connection = 'disconnected';
     
-    // Clear all timers
-    if (this.healthCheckTimer) {
-      clearInterval(this.healthCheckTimer);
-      this.healthCheckTimer = null;
-    }
+    console.log('🛑 [PROCESS_MANAGER] Starting graceful shutdown...');
+    this.emit('shutdown-started');
     
+    // MEMORY LEAK FIX: Clear all timers
+    this.stopHealthMonitoring();
     if (this.connectionTimer) {
       clearTimeout(this.connectionTimer);
       this.connectionTimer = null;
     }
-    
     if (this.startupTimer) {
       clearTimeout(this.startupTimer);
       this.startupTimer = null;
     }
-    
+
     // Close WebSocket connection
     if (this.wsConnection) {
       console.log('🔌 [PROCESS_MANAGER] Closing WebSocket connection...');

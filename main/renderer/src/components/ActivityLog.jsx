@@ -19,12 +19,13 @@ function ActivityLog({ project }) {
   const [isConnected, setIsConnected] = useState(false)
   const [filter, setFilter] = useState('all')
 
-  console.log('📋 [ACTIVITY_LOG] Component rendering with project:', project?.name)
+  console.log('📋 [ACTIVITY_LOG] Component rendering for project:', project?.name || 'all')
 
-  // Initialize global activity manager once
+  // Global activity manager setup - FIXED: Add proper cleanup
   useEffect(() => {
-    console.log('📋 [ACTIVITY_LOG] Initializing global activity manager...')
+    console.log('📋 [ACTIVITY_LOG] Setting up global activity manager...')
     
+    // Create global activity manager if it doesn't exist
     if (!globalActivityManager) {
       console.log('📋 [ACTIVITY_LOG] Creating new global activity manager')
       
@@ -58,24 +59,33 @@ function ActivityLog({ project }) {
         },
         
         handleBackendUpdate: (data) => {
-          console.log('📋 [ACTIVITY_LOG] Global backend update:', data.type, data.event || data.command)
+          console.log('📋 [ACTIVITY_LOG] Backend update received:', data)
           
-          // Skip response events - they're handled by requesting components
-          if (data.type === 'response') {
-            return
-          }
-          
-          // Create activity from backend event
+          // Convert backend update to activity format
           let activity = null
           
-          if (data.type === 'activity' && data.activity) {
-            // Direct activity data
+          if (data.type === 'deploy_detected') {
             activity = {
-              ...data.activity,
-              id: data.activity.id || `activity-${generateUUID()}`
+              id: `deploy-${generateUUID()}`,
+              timestamp: data.timestamp || new Date().toISOString(),
+              type: 'deploy',
+              message: `Deploy detected: ${data.deploy_command || 'Unknown command'}`,
+              data: data,
+              project: data.project_name || 'Unknown',
+              event: 'detected'
             }
-          } else if (data.event) {
-            // Convert event to activity
+          } else if (data.type === 'timer_update') {
+            activity = {
+              id: `timer-${generateUUID()}`,
+              timestamp: data.timestamp || new Date().toISOString(),
+              type: 'timer',
+              message: `Timer ${data.status || 'updated'}: ${data.project_name || 'Unknown project'}`,
+              data: data,
+              project: data.project_name || 'Unknown',
+              event: data.status || 'update'
+            }
+          } else {
+            // Generic event handling
             activity = {
               id: `event-${generateUUID()}`,
               timestamp: data.timestamp || new Date().toISOString(),
@@ -115,7 +125,13 @@ function ActivityLog({ project }) {
     // Register this component as a listener
     const unregister = globalActivityManager.registerListener(setActivities)
     
-    return unregister
+    // MEMORY LEAK FIX: Proper cleanup function
+    return () => {
+      console.log('🧹 [ACTIVITY_LOG] Component unmounting - cleaning up listeners')
+      if (unregister) {
+        unregister()
+      }
+    }
   }, []) // Empty dependency array - run only once
   
   // Connection status monitoring - REMOVED: Let App.jsx handle connection monitoring

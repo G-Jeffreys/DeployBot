@@ -25,7 +25,7 @@ class DeployMonitor:
         self.last_known_positions = {}  # log_file_path -> last_read_position
         self.monitoring_active = False
         self.monitor_task = None
-        self.check_interval = 2.0  # Check every 2 seconds
+        self.check_interval = 5.0  # Check every 5 seconds instead of 2
         self.event_callbacks = []  # Callbacks for deploy detection events
         
         # Specific callbacks for different event types

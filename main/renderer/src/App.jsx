@@ -49,106 +49,65 @@ function App() {
     backendStatus 
   })
 
-  // Backend connection monitoring and initialization
+  // Connection monitoring - MEMORY LEAK FIX: Reduced frequency and better cleanup
   useEffect(() => {
-    console.log('🔗 [APP] Setting up backend connection monitoring...')
-    let connectionCheckInterval = null
-    let retryAttempts = 0
-    const maxRetries = 10
+    console.log('🔗 [APP] Setting up connection monitoring...')
+    
+    let connectionCheckInterval
+    let mounted = true  // Track if component is still mounted
 
     const checkConnection = async () => {
+      if (!mounted) return  // Don't proceed if component is unmounted
+      
       try {
-        console.log('🔍 [APP] Checking backend connection...')
-        
-        // Use the ping command to test backend connectivity
-        const response = await window.electronAPI?.python.sendCommand('ping', { 
-          timestamp: new Date().toISOString() 
+        const response = await window.electronAPI?.backend.ping()
+        const isConnectedNow = response && response.data && response.data.success
+
+        if (!mounted) return  // Check again after async operation
+
+        // Use functional form to avoid stale closure issues
+        setIsBackendConnected(currentConnected => {
+          if (isConnectedNow !== currentConnected) {
+            console.log('🔄 [APP] Connection state changed:', isConnectedNow ? 'connected' : 'disconnected')
+            setBackendStatus(isConnectedNow ? 'connected' : 'disconnected')
+            
+            if (isConnectedNow) {
+              setAppError(null)
+            }
+          }
+          return isConnectedNow
         })
-        
-        console.log('🔍 [APP] Backend ping response:', JSON.stringify(response, null, 2))
-        
-        // Handle WebSocket response structure
-        const data = response?.data || response
-        
-        if (data && data.success) {
-          console.log('✅ [APP] Backend connection successful')
-          setIsBackendConnected(true)
-          setBackendStatus('connected')
-          setAppError(null)
-          retryAttempts = 0
-          
-          // Load initial data when first connected
-          setIsLoading(false)
-        } else {
-          throw new Error(data?.error || data?.message || 'Backend ping failed')
-        }
+
+        // Set loading to false after first successful check (regardless of result)
+        setIsLoading(false)
+
       } catch (error) {
-        console.error('❌ [APP] Backend connection check failed:', error)
+        if (!mounted) return
         
-        retryAttempts++
-        if (retryAttempts <= maxRetries) {
-          console.log(`🔄 [APP] Connection attempt ${retryAttempts}/${maxRetries} failed, will retry...`)
-          setBackendStatus(`connecting (${retryAttempts}/${maxRetries})`)
-          setIsBackendConnected(false)
-        } else {
-          console.error(`💀 [APP] Max connection retries (${maxRetries}) reached`)
-          setBackendStatus('failed')
-          setIsBackendConnected(false)
-          setAppError(`Backend connection failed after ${maxRetries} attempts. Please check if the Python backend is running.`)
-        }
+        console.error('❌ [APP] Connection check failed:', error)
+        setIsBackendConnected(false)
+        setBackendStatus('error')
+        setIsLoading(false)  // Always set loading to false even on error
+        setAppError(`Connection failed: ${error.message}`)
       }
     }
 
     // Initial connection check
     checkConnection()
-    
-    // Set up periodic connection monitoring
-    connectionCheckInterval = setInterval(checkConnection, 5000) // Check every 5 seconds
-    
-    // Set up event listeners for backend state changes
-    if (window.electronAPI?.events?.onBackendStateChange) {
-      console.log('🔗 [APP] Setting up backend state change listener')
-      
-      const handleBackendStateChange = (state) => {
-        console.log('🔄 [APP] Backend state changed:', state)
-        
-        switch (state) {
-          case 'connected':
-            setIsBackendConnected(true)
-            setBackendStatus('connected')
-            setAppError(null)
-            break
-          case 'disconnected':
-            setIsBackendConnected(false)
-            setBackendStatus('disconnected')
-            break
-          case 'connecting':
-            setIsBackendConnected(false)
-            setBackendStatus('connecting')
-            break
-          case 'error':
-            setIsBackendConnected(false)
-            setBackendStatus('error')
-            setAppError('Backend connection error')
-            break
-          default:
-            console.warn('🤔 [APP] Unknown backend state:', state)
-        }
-      }
-      
-      window.electronAPI.events.onBackendStateChange(handleBackendStateChange)
-    }
 
-    // Cleanup function
+    // Set up periodic connection monitoring with MUCH longer interval
+    connectionCheckInterval = setInterval(checkConnection, 10000) // Check every 10 seconds
+
     return () => {
       console.log('🧹 [APP] Cleaning up connection monitoring...')
+      mounted = false  // Mark as unmounted
       if (connectionCheckInterval) {
         clearInterval(connectionCheckInterval)
       }
     }
-  }, []) // Only run once on mount
+  }, [])  // Empty dependency array - run once on mount only
 
-  // Deploy status monitoring
+  // Deploy status monitoring - MEMORY LEAK FIX: Reduced frequency and better cleanup
   useEffect(() => {
     console.log('📦 [APP] Setting up deploy status monitoring...')
     
@@ -190,13 +149,14 @@ function App() {
     // Initial check
     checkDeployStatus()
     
-    // Periodic checks
-    deployCheckInterval = setInterval(checkDeployStatus, 3000)
+    // MEMORY LEAK FIX: Reduced from 3 seconds to 5 seconds to reduce load
+    deployCheckInterval = setInterval(checkDeployStatus, 5000)
 
     return () => {
       console.log('🧹 [APP] Cleaning up deploy status monitoring...')
       if (deployCheckInterval) {
         clearInterval(deployCheckInterval)
+        deployCheckInterval = null
       }
     }
   }, [isBackendConnected, selectedProject?.path]) // Removed deployStatus from dependencies

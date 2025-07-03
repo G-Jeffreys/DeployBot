@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react'
+import DirectoryPicker from './DirectoryPicker'
+import CustomDirectoryManager from './CustomDirectoryManager'
 
 const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected, backendStatus }) => {
   const [projects, setProjects] = useState([])
   const [isCreating, setIsCreating] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
+  const [customDirectory, setCustomDirectory] = useState('')
+  const [useCustomDirectory, setUseCustomDirectory] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [showDirectoryManager, setShowDirectoryManager] = useState(false)
 
   // Load projects when backend becomes connected - FIXED infinite loop
   useEffect(() => {
@@ -104,7 +109,7 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
   }
 
   /**
-   * Create a new project using real backend
+   * Create a new project using real backend with custom directory support
    */
   const handleCreateProject = async () => {
     if (!newProjectName.trim()) {
@@ -112,7 +117,11 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
       return
     }
 
-    console.log('📁 [PROJECT_SELECTOR] Creating new project via backend:', newProjectName)
+    console.log('📁 [PROJECT_SELECTOR] Creating new project via backend:', {
+      name: newProjectName,
+      useCustomDirectory,
+      customDirectory
+    })
     setIsLoading(true)
     
     try {
@@ -120,6 +129,12 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
         name: newProjectName.trim(),
         backend_services: [],
         description: `Project created via DeployBot UI on ${new Date().toLocaleDateString()}`
+      }
+
+      // Add custom directory if specified
+      if (useCustomDirectory && customDirectory && customDirectory.trim()) {
+        projectData.custom_directory = customDirectory.trim()
+        console.log('📂 [PROJECT_SELECTOR] Using custom directory:', customDirectory.trim())
       }
       
       const response = await window.electronAPI?.project.create(projectData)
@@ -131,7 +146,11 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
       if (data && data.success && data.project) {
         // Add the new project to the list
         setProjects(prev => [data.project, ...prev])
+        
+        // Reset form state
         setNewProjectName('')
+        setCustomDirectory('')
+        setUseCustomDirectory(false)
         setIsCreating(false)
         
         console.log('✅ [PROJECT_SELECTOR] Project created successfully:', data.project)
@@ -264,6 +283,14 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
         </h3>
         <div className="flex items-center space-x-2">
           <button
+            onClick={() => setShowDirectoryManager(true)}
+            className="btn-outline text-xs"
+            disabled={isLoading}
+            title="Manage custom directories"
+          >
+            🗂️
+          </button>
+          <button
             onClick={handleRefresh}
             className="btn-outline text-xs"
             disabled={isLoading}
@@ -301,10 +328,12 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
       {/* Create Project Form */}
       {isCreating && (
         <div className="card">
-          <div className="card-body space-y-3">
+          <div className="card-body space-y-4">
             <h4 className="font-medium text-gray-900 dark:text-white">
               Create New Project
             </h4>
+            
+            {/* Project Name */}
             <div>
               <label className="form-label">Project Name</label>
               <input
@@ -316,27 +345,72 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
                 autoFocus
                 disabled={isLoading}
                 onKeyPress={(e) => {
-                  if (e.key === 'Enter' && !isLoading) {
+                  if (e.key === 'Enter' && !isLoading && !useCustomDirectory) {
                     handleCreateProject()
                   } else if (e.key === 'Escape') {
                     setIsCreating(false)
                     setNewProjectName('')
+                    setCustomDirectory('')
+                    setUseCustomDirectory(false)
                   }
                 }}
               />
             </div>
+
+            {/* Custom Directory Option */}
+            <div className="space-y-3">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="useCustomDirectory"
+                  checked={useCustomDirectory}
+                  onChange={(e) => setUseCustomDirectory(e.target.checked)}
+                  className="form-checkbox"
+                  disabled={isLoading}
+                />
+                <label htmlFor="useCustomDirectory" className="form-label text-sm mb-0">
+                  Use custom directory
+                </label>
+              </div>
+              
+              {useCustomDirectory && (
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
+                  <DirectoryPicker
+                    value={customDirectory}
+                    onChange={setCustomDirectory}
+                    label=""
+                    placeholder="Choose where to store this project..."
+                    disabled={isLoading}
+                    showValidation={true}
+                    className="mb-0"
+                  />
+                  
+                  <div className="mt-2 text-xs text-blue-600 dark:text-blue-400">
+                    💡 Project will be created in the selected directory instead of the default location
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Action Buttons */}
             <div className="flex space-x-2">
               <button
                 onClick={handleCreateProject}
                 className="btn-primary text-sm"
-                disabled={!newProjectName.trim() || isLoading}
+                disabled={
+                  !newProjectName.trim() || 
+                  isLoading || 
+                  (useCustomDirectory && (!customDirectory || !customDirectory.trim()))
+                }
               >
-                {isLoading ? '⏳ Creating...' : 'Create'}
+                {isLoading ? '⏳ Creating...' : 'Create Project'}
               </button>
               <button
                 onClick={() => {
                   setIsCreating(false)
                   setNewProjectName('')
+                  setCustomDirectory('')
+                  setUseCustomDirectory(false)
                 }}
                 className="btn-outline text-sm"
                 disabled={isLoading}
@@ -390,29 +464,49 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
                     </h4>
                     
                     {/* Project metadata */}
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {project.taskCount ? (
-                        <span>{project.taskCount} tasks</span>
-                      ) : project.task_count ? (
-                        <span>{project.task_count} tasks</span>
-                      ) : project.tasks ? (
-                        <span>{project.tasks.length} tasks</span>
-                      ) : (
-                        <span>No tasks</span>
-                      )}
-                      
-                      {project.created_at && (
-                        <>
-                          <span> • </span>
-                          <span>Created {new Date(project.created_at).toLocaleDateString()}</span>
-                        </>
-                      )}
-                      
-                      {project.last_deploy && (
-                        <>
-                          <span> • </span>
-                          <span>Last deploy: {new Date(project.last_deploy).toLocaleDateString()}</span>
-                        </>
+                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 space-y-1">
+                      <div className="flex items-center flex-wrap gap-2">
+                        {project.taskCount ? (
+                          <span>{project.taskCount} tasks</span>
+                        ) : project.task_count ? (
+                          <span>{project.task_count} tasks</span>
+                        ) : project.tasks ? (
+                          <span>{project.tasks.length} tasks</span>
+                        ) : (
+                          <span>No tasks</span>
+                        )}
+                        
+                        {project.created_at && (
+                          <>
+                            <span>•</span>
+                            <span>Created {new Date(project.created_at).toLocaleDateString()}</span>
+                          </>
+                        )}
+                        
+                        {project.last_deploy && (
+                          <>
+                            <span>•</span>
+                            <span>Last deploy: {new Date(project.last_deploy).toLocaleDateString()}</span>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Custom directory location info */}
+                      {project.path && (
+                        <div className="flex items-center space-x-1 text-blue-600 dark:text-blue-400">
+                          <span>📍</span>
+                          <span className="truncate font-mono">
+                            {project.path.includes('DeployBot/projects') 
+                              ? 'Default location' 
+                              : `Custom: ${project.path.split('/').slice(-2).join('/')}`
+                            }
+                          </span>
+                          {!project.path.includes('DeployBot/projects') && (
+                            <span className="inline-flex items-center px-1 py-0.5 rounded text-xs bg-blue-100 text-blue-800 dark:bg-blue-800 dark:text-blue-100">
+                              Custom
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
 
@@ -462,6 +556,13 @@ const ProjectSelector = ({ selectedProject, onProjectSelect, isBackendConnected,
           <span>🔄 Loading from backend...</span>
         )}
       </div>
+
+      {/* Custom Directory Manager Modal */}
+      <CustomDirectoryManager
+        isOpen={showDirectoryManager}
+        onClose={() => setShowDirectoryManager(false)}
+        onRefreshProjects={handleRefresh}
+      />
     </div>
   )
 }

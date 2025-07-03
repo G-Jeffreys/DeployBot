@@ -576,9 +576,17 @@ class WebSocketServer:
                 try:
                     logger.info("🧪 [TEST] Starting Week 3 comprehensive workflow test")
                     
-                    # Test 1: Task selection
-                    projects_root = Path(__file__).parent.parent / "projects"
-                    project_path = str(projects_root / project_name)
+                    # PHASE 1 ENHANCED: Test 1: Task selection with custom directory support
+                    try:
+                        project_path = await project_manager.resolve_project_path(project_name)
+                        if not project_path:
+                            # Fallback to default directory
+                            projects_root = Path(__file__).parent.parent / "projects"
+                            project_path = str(projects_root / project_name)
+                    except Exception as e:
+                        logger.debug("🔄 [TEST] Using fallback path resolution", error=str(e))
+                        projects_root = Path(__file__).parent.parent / "projects"
+                        project_path = str(projects_root / project_name)
                     
                     context = {
                         "project_name": project_name,
@@ -853,6 +861,58 @@ class WebSocketServer:
                 else:
                     return {"success": False, "message": "No project specified"}
             
+            # PHASE 1 NEW COMMANDS: Custom Directory Management
+            elif command == "validate-custom-directory":
+                directory_path = data.get("directory_path")
+                if directory_path:
+                    validation_result = await project_manager.validate_custom_directory(directory_path)
+                    return {
+                        "success": True,
+                        "validation_result": validation_result,
+                        "directory_path": directory_path
+                    }
+                else:
+                    return {"success": False, "message": "Directory path required"}
+            
+            elif command == "migrate-existing-projects":
+                logger.info("🔄 [CUSTOM_DIR] Starting project migration to custom directory system")
+                migration_result = await project_manager.migrate_existing_projects()
+                return {
+                    "success": migration_result["success"],
+                    "migration_report": migration_result,
+                    "message": "Project migration completed"
+                }
+            
+            elif command == "list-project-mappings":
+                try:
+                    from project_directory_manager import project_directory_manager
+                    mappings = await project_directory_manager.load_mappings()
+                    all_projects = await project_directory_manager.list_all_projects()
+                    
+                    return {
+                        "success": True,
+                        "custom_mappings": mappings,
+                        "all_projects": all_projects,
+                        "total_custom_mappings": len(mappings),
+                        "total_projects": len(all_projects)
+                    }
+                except Exception as e:
+                    logger.error("❌ [CUSTOM_DIR] Failed to list project mappings", error=str(e))
+                    return {"success": False, "error": str(e), "message": "Failed to list project mappings"}
+            
+            elif command == "resolve-project-path":
+                project_name = data.get("project_name")
+                if project_name:
+                    resolved_path = await project_manager.resolve_project_path(project_name)
+                    return {
+                        "success": True,
+                        "project_name": project_name,
+                        "resolved_path": resolved_path,
+                        "found": resolved_path is not None
+                    }
+                else:
+                    return {"success": False, "message": "Project name required"}
+            
             # Activity Logs Management
             elif command == "get-logs":
                 log_type = data.get("type", "activity")
@@ -972,9 +1032,24 @@ async def select_task(state: Dict[str, Any]) -> Dict[str, Any]:
         state["selected_task"] = None
         return state
     
-    # Get project path
-    projects_root = Path(__file__).parent.parent / "projects"
-    project_path = str(projects_root / project_name)
+    # PHASE 1 ENHANCED: Get project path using ProjectDirectoryManager
+    try:
+        from project_manager import project_manager
+        project_path = await project_manager.resolve_project_path(project_name)
+        
+        if not project_path:
+            logger.warning("⚠️ [LANGGRAPH] Project path could not be resolved", 
+                         project_name=project_name)
+            # Fallback to default directory
+            projects_root = Path(__file__).parent.parent / "projects"
+            project_path = str(projects_root / project_name)
+        else:
+            logger.debug("✅ [LANGGRAPH] Project path resolved using custom directory support", 
+                       project_name=project_name, path=project_path)
+    except Exception as e:
+        logger.debug("🔄 [LANGGRAPH] Could not use project manager, using fallback", error=str(e))
+        projects_root = Path(__file__).parent.parent / "projects"
+        project_path = str(projects_root / project_name)
     
     # Prepare context for task selection
     context = {

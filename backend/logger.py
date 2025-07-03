@@ -18,11 +18,11 @@ class ActivityLogger:
     """Manages activity logging for DeployBot projects"""
     
     def __init__(self):
-        self.log_queue = asyncio.Queue()
+        self.log_queue = asyncio.Queue(maxsize=100)
         self.queue_processor_task = None
         self.processing_active = False
         
-        logger.info("📝 [ACTIVITY_LOGGER] ActivityLogger initialized")
+        logger.info("📝 [ACTIVITY_LOGGER] ActivityLogger initialized with queue size limit")
 
     async def start_processing(self):
         """Start the log queue processing task"""
@@ -258,8 +258,8 @@ class ActivityLogger:
         
         while self.processing_active:
             try:
-                # Wait for log entries with timeout
-                log_entry = await asyncio.wait_for(self.log_queue.get(), timeout=1.0)
+                # MEMORY LEAK FIX: Increased timeout to reduce CPU pressure
+                log_entry = await asyncio.wait_for(self.log_queue.get(), timeout=2.0)
                 await self._write_log_entry(log_entry)
                 self.log_queue.task_done()
                 
@@ -271,7 +271,8 @@ class ActivityLogger:
                 break
             except Exception as e:
                 logger.error("❌ [ACTIVITY_LOGGER] Error processing log queue", error=str(e))
-                await asyncio.sleep(1)  # Wait before retrying
+                # MEMORY LEAK FIX: Increased wait time on errors
+                await asyncio.sleep(2)  # Wait 2 seconds before retrying instead of 1
 
     async def _write_log_entry(self, log_entry: Dict[str, Any]):
         """Write a log entry to the appropriate file"""
@@ -312,7 +313,11 @@ class ActivityLogger:
                         project_name=log_entry.get("project_name"), error=str(e))
 
     def _get_log_file_path(self, project_name: str, project_path: Optional[str] = None) -> Optional[Path]:
-        """Determine the appropriate log file path for a project"""
+        """
+        Determine the appropriate log file path for a project
+        
+        PHASE 1 ENHANCED: Now uses ProjectDirectoryManager for path resolution
+        """
         try:
             if project_name == "system":
                 # System-wide events go to a global log
@@ -321,12 +326,63 @@ class ActivityLogger:
                 return projects_root / "system_activity.log"
             
             if project_path:
-                # Use provided project path
+                # Use provided project path directly
                 project_dir = Path(project_path)
+                logger.debug("🔍 [ACTIVITY_LOGGER] Using provided project path", 
+                           project_name=project_name, path=str(project_dir))
             else:
-                # Try to find project by name
-                projects_root = Path(__file__).parent.parent / "projects"
-                project_dir = projects_root / project_name
+                # PHASE 1: Use ProjectDirectoryManager to resolve project path
+                try:
+                    from project_directory_manager import project_directory_manager
+                    import asyncio
+                    
+                    # Get the current event loop or create a new one
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # If we're already in an async context, we can't use await
+                            # Fall back to the old method for now
+                            logger.debug("🔄 [ACTIVITY_LOGGER] In async context, using fallback method")
+                            projects_root = Path(__file__).parent.parent / "projects"
+                            project_dir = projects_root / project_name
+                        else:
+                            # We can run the async method
+                            resolved_path = loop.run_until_complete(
+                                project_directory_manager.get_project_path(project_name)
+                            )
+                            if resolved_path:
+                                project_dir = Path(resolved_path)
+                                logger.debug("✅ [ACTIVITY_LOGGER] Resolved project path using directory manager", 
+                                           project_name=project_name, path=str(project_dir))
+                            else:
+                                logger.debug("❓ [ACTIVITY_LOGGER] Project not found in directory manager", 
+                                           project_name=project_name)
+                                return None
+                    except RuntimeError:
+                        # No event loop, create one
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            resolved_path = loop.run_until_complete(
+                                project_directory_manager.get_project_path(project_name)
+                            )
+                            if resolved_path:
+                                project_dir = Path(resolved_path)
+                                logger.debug("✅ [ACTIVITY_LOGGER] Resolved project path with new event loop", 
+                                           project_name=project_name, path=str(project_dir))
+                            else:
+                                logger.debug("❓ [ACTIVITY_LOGGER] Project not found in directory manager", 
+                                           project_name=project_name)
+                                return None
+                        finally:
+                            loop.close()
+                            
+                except Exception as e:
+                    logger.debug("🔄 [ACTIVITY_LOGGER] Could not use directory manager, falling back", 
+                               error=str(e))
+                    # Fallback to old method
+                    projects_root = Path(__file__).parent.parent / "projects"
+                    project_dir = projects_root / project_name
             
             if project_dir.exists():
                 logs_dir = project_dir / "logs"
@@ -334,7 +390,9 @@ class ActivityLogger:
                 return logs_dir / "activity.log"
             else:
                 logger.warning("⚠️ [ACTIVITY_LOGGER] Project directory not found", 
-                             project_name=project_name, project_path=project_path)
+                             project_name=project_name, 
+                             project_path=project_path,
+                             resolved_path=str(project_dir))
                 return None
         
         except Exception as e:

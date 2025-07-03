@@ -4,6 +4,10 @@ Project Management Backend for DeployBot
 
 This module handles real project management operations including creating,
 deleting, listing, and loading project data from the filesystem.
+
+ENHANCED FOR PHASE 1: Now supports custom project directories through the
+ProjectDirectoryManager system, allowing projects to be stored anywhere
+on the filesystem rather than being restricted to DeployBot/projects.
 """
 
 import json
@@ -14,27 +18,60 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import structlog
 
+# Import the new project directory management system
+from project_directory_manager import project_directory_manager
+
 logger = structlog.get_logger()
 
 class ProjectManager:
-    """Manages DeployBot projects on the filesystem"""
+    """
+    Manages DeployBot projects on the filesystem
+    
+    PHASE 1 ENHANCED: Now supports custom project directories through the
+    ProjectDirectoryManager system for flexible project location management.
+    """
     
     def __init__(self, projects_root: Optional[str] = None):
+        """
+        Initialize the ProjectManager with enhanced custom directory support
+        
+        Args:
+            projects_root: Optional default projects root (for backward compatibility)
+        """
         if projects_root:
             self.projects_root = Path(projects_root).resolve()
         else:
             # Default to projects/ directory relative to the langgraph folder
             self.projects_root = Path(__file__).parent.parent / "projects"
         
-        # Ensure projects directory exists
+        # Ensure default projects directory exists for backward compatibility
         self.projects_root.mkdir(exist_ok=True)
         
-        logger.info("📁 [PROJECT_MANAGER] ProjectManager initialized", 
-                   projects_root=str(self.projects_root))
+        # Store reference to the project directory manager
+        self.directory_manager = project_directory_manager
+        
+        logger.info("📁 [PROJECT_MANAGER] ProjectManager initialized with custom directory support", 
+                   default_projects_root=str(self.projects_root),
+                   uses_custom_directories=True,
+                   directory_manager_available=self.directory_manager is not None)
 
     async def create_project(self, project_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new DeployBot project with directory structure"""
+        """
+        Create a new DeployBot project with directory structure
+        
+        PHASE 1 ENHANCED: Now supports custom project directories
+        
+        Args:
+            project_data: Project configuration including:
+                - name: Project name (required)
+                - custom_directory: Optional custom directory path
+                - All other standard project settings
+        
+        Returns:
+            Result dictionary with success status and project details
+        """
         project_name = project_data.get("name", "").strip()
+        custom_directory = project_data.get("custom_directory", "").strip()
         
         if not project_name:
             return {
@@ -43,12 +80,44 @@ class ProjectManager:
                 "message": "Please provide a valid project name"
             }
         
-        logger.info("📁 [PROJECT_MANAGER] Creating new project", project_name=project_name)
+        logger.info("📁 [PROJECT_MANAGER] Creating new project with custom directory support", 
+                   project_name=project_name, 
+                   has_custom_directory=bool(custom_directory),
+                   custom_directory=custom_directory or "default")
         
         try:
             # Sanitize project name for filesystem
             safe_project_name = self._sanitize_project_name(project_name)
-            project_path = self.projects_root / safe_project_name
+            
+            # Determine project path based on custom directory preference
+            if custom_directory:
+                # Validate and use custom directory
+                validation_result = await self.directory_manager.validate_project_directory(custom_directory)
+                
+                if not validation_result["valid"]:
+                    logger.error("❌ [PROJECT_MANAGER] Custom directory validation failed", 
+                               custom_directory=custom_directory, 
+                               issues=validation_result.get("issues", []))
+                    return {
+                        "success": False,
+                        "error": "Invalid custom directory",
+                        "message": f"Custom directory validation failed: {'; '.join(validation_result.get('issues', ['Unknown error']))}",
+                        "validation_details": validation_result
+                    }
+                
+                # Use custom directory with project name as subdirectory
+                custom_path = Path(custom_directory).resolve()
+                project_path = custom_path / safe_project_name
+                
+                logger.info("📂 [PROJECT_MANAGER] Using custom directory", 
+                           custom_directory=str(custom_path),
+                           project_path=str(project_path))
+            else:
+                # Use default projects directory
+                project_path = self.projects_root / safe_project_name
+                
+                logger.info("📂 [PROJECT_MANAGER] Using default directory", 
+                           project_path=str(project_path))
             
             # Check if project already exists
             if project_path.exists():
@@ -85,8 +154,18 @@ class ProjectManager:
             deploy_log = project_path / "logs" / "deploy_log.txt"
             deploy_log.touch()
             
+            # Register the project in the directory mapping system
+            mapping_success = await self.directory_manager.add_project_mapping(project_name, str(project_path))
+            
+            if not mapping_success:
+                logger.warning("⚠️ [PROJECT_MANAGER] Failed to register project mapping", 
+                             project_name=project_name, project_path=str(project_path))
+            
             logger.info("✅ [PROJECT_MANAGER] Project created successfully", 
-                       project_name=project_name, project_path=str(project_path))
+                       project_name=project_name, 
+                       project_path=str(project_path),
+                       uses_custom_directory=bool(custom_directory),
+                       mapping_registered=mapping_success)
             
             return {
                 "success": True,
@@ -95,7 +174,9 @@ class ProjectManager:
                     "name": project_name,
                     "path": str(project_path),
                     "config": config,
-                    "created_at": config["createdAt"]
+                    "created_at": config["createdAt"],
+                    "uses_custom_directory": bool(custom_directory),
+                    "custom_directory": custom_directory if custom_directory else None
                 }
             }
             
@@ -109,19 +190,17 @@ class ProjectManager:
             }
 
     async def delete_project(self, project_path: str) -> Dict[str, Any]:
-        """Delete a project and all its data"""
-        logger.info("🗑️ [PROJECT_MANAGER] Deleting project", project_path=project_path)
+        """
+        Delete a project and all its data
+        
+        PHASE 1 ENHANCED: Now handles projects in custom directories and
+        cleans up project directory mappings
+        """
+        logger.info("🗑️ [PROJECT_MANAGER] Deleting project with custom directory support", 
+                   project_path=project_path)
         
         try:
             path_obj = Path(project_path).resolve()
-            
-            # Verify it's under our projects root for safety
-            if not str(path_obj).startswith(str(self.projects_root)):
-                return {
-                    "success": False,
-                    "error": "Invalid project path",
-                    "message": "Project path is not under the projects directory"
-                }
             
             if not path_obj.exists():
                 return {
@@ -130,7 +209,7 @@ class ProjectManager:
                     "message": f"Project at path '{project_path}' does not exist"
                 }
             
-            # Load project name from config for logging
+            # Load project name from config for logging and mapping cleanup
             project_name = path_obj.name
             config_file = path_obj / "config.json"
             if config_file.exists():
@@ -141,16 +220,48 @@ class ProjectManager:
                 except:
                     pass  # Use directory name as fallback
             
+            # Enhanced safety check: Allow deletion of projects in custom directories
+            # Check if this is in the default projects directory OR a known custom mapping
+            is_in_default_dir = str(path_obj).startswith(str(self.projects_root))
+            is_custom_mapped = False
+            
+            # Check if this project is in our custom mappings
+            try:
+                mapped_path = await self.directory_manager.get_project_path(project_name)
+                is_custom_mapped = mapped_path and Path(mapped_path).resolve() == path_obj
+            except Exception as e:
+                logger.debug("🔍 [PROJECT_MANAGER] Could not check custom mapping", error=str(e))
+            
+            if not is_in_default_dir and not is_custom_mapped:
+                logger.warning("⚠️ [PROJECT_MANAGER] Project path is not in known locations", 
+                             project_path=str(path_obj),
+                             project_name=project_name,
+                             in_default=is_in_default_dir,
+                             in_custom_mapping=is_custom_mapped)
+                # Allow deletion but warn
+            
+            logger.info("🗂️ [PROJECT_MANAGER] Project location analysis", 
+                       project_name=project_name,
+                       in_default_directory=is_in_default_dir,
+                       in_custom_mapping=is_custom_mapped,
+                       will_proceed=True)
+            
             # Remove the entire project directory
             shutil.rmtree(path_obj)
             
+            # Clean up the project mapping if it exists
+            mapping_removed = await self.directory_manager.remove_project_mapping(project_name)
+            
             logger.info("✅ [PROJECT_MANAGER] Project deleted successfully", 
-                       project_name=project_name, project_path=project_path)
+                       project_name=project_name, 
+                       project_path=project_path,
+                       mapping_cleaned_up=mapping_removed)
             
             return {
                 "success": True,
                 "message": f"Project '{project_name}' deleted successfully",
-                "deleted_path": project_path
+                "deleted_path": project_path,
+                "mapping_cleaned_up": mapping_removed
             }
             
         except Exception as e:
@@ -163,16 +274,28 @@ class ProjectManager:
             }
 
     async def list_projects(self) -> Dict[str, Any]:
-        """List all available projects"""
-        logger.info("📋 [PROJECT_MANAGER] Listing all projects...")
+        """
+        List all available projects from both default and custom directories
+        
+        PHASE 1 ENHANCED: Now uses ProjectDirectoryManager to find projects
+        in both default and custom locations
+        """
+        logger.info("📋 [PROJECT_MANAGER] Listing all projects from all locations...")
         
         try:
             projects = []
+            default_count = 0
+            custom_count = 0
             
-            # Scan projects directory
-            for project_dir in self.projects_root.iterdir():
-                if not project_dir.is_dir():
-                    continue
+            # Get all projects using the directory manager
+            all_project_locations = await self.directory_manager.list_all_projects()
+            
+            logger.info("🔍 [PROJECT_MANAGER] Found project locations", 
+                       total_locations=len(all_project_locations))
+            
+            # Process each project location
+            for project_name, project_path in all_project_locations:
+                project_dir = Path(project_path)
                 
                 # Check if it's a valid DeployBot project
                 config_file = project_dir / "config.json"
@@ -180,30 +303,56 @@ class ProjectManager:
                 
                 if not config_file.exists() or not todo_file.exists():
                     logger.warning("⚠️ [PROJECT_MANAGER] Skipping invalid project directory", 
-                                 directory=str(project_dir))
+                                 project_name=project_name,
+                                 directory=str(project_dir),
+                                 has_config=config_file.exists(),
+                                 has_todo=todo_file.exists())
                     continue
                 
                 try:
                     # Load project metadata
                     project_info = await self._load_project_info(project_dir)
                     if project_info:
+                        # Add location metadata
+                        is_in_default = str(project_dir).startswith(str(self.projects_root))
+                        project_info["is_custom_directory"] = not is_in_default
+                        project_info["location_type"] = "default" if is_in_default else "custom"
+                        
+                        if is_in_default:
+                            default_count += 1
+                        else:
+                            custom_count += 1
+                        
                         projects.append(project_info)
+                        
+                        logger.debug("📂 [PROJECT_MANAGER] Loaded project info", 
+                                   project_name=project_name,
+                                   location_type=project_info["location_type"],
+                                   path=str(project_dir))
+                        
                 except Exception as e:
                     logger.warning("⚠️ [PROJECT_MANAGER] Error loading project info", 
-                                 project_dir=str(project_dir), error=str(e))
+                                 project_name=project_name,
+                                 project_dir=str(project_dir), 
+                                 error=str(e))
                     continue
             
             # Sort projects by last modified time (most recent first)
             projects.sort(key=lambda x: x.get("lastModified", ""), reverse=True)
             
             logger.info("✅ [PROJECT_MANAGER] Projects listed successfully", 
-                       project_count=len(projects))
+                       total_projects=len(projects),
+                       from_default_directory=default_count,
+                       from_custom_directories=custom_count)
             
             return {
                 "success": True,
                 "projects": projects,
                 "total_count": len(projects),
-                "projects_root": str(self.projects_root)
+                "default_projects_count": default_count,
+                "custom_projects_count": custom_count,
+                "default_projects_root": str(self.projects_root),
+                "supports_custom_directories": True
             }
             
         except Exception as e:
@@ -216,8 +365,13 @@ class ProjectManager:
             }
 
     async def load_project(self, project_path: str) -> Dict[str, Any]:
-        """Load complete project data including config, tasks, and logs"""
-        logger.info("📖 [PROJECT_MANAGER] Loading project data", project_path=project_path)
+        """
+        Load complete project data including config, tasks, and logs
+        
+        PHASE 1 ENHANCED: Supports loading projects from custom directories
+        """
+        logger.info("📖 [PROJECT_MANAGER] Loading project data with custom directory support", 
+                   project_path=project_path)
         
         try:
             path_obj = Path(project_path).resolve()
@@ -337,6 +491,68 @@ class ProjectManager:
                 "error": str(e),
                 "message": f"Failed to update project config: {str(e)}"
             }
+
+    async def resolve_project_path(self, project_name: str) -> Optional[str]:
+        """
+        Resolve a project name to its directory path
+        
+        PHASE 1 NEW METHOD: Uses ProjectDirectoryManager to find projects
+        in both default and custom locations
+        
+        Args:
+            project_name: Name of the project to resolve
+            
+        Returns:
+            Full path to the project directory, or None if not found
+        """
+        logger.debug("🔍 [PROJECT_MANAGER] Resolving project path", project_name=project_name)
+        
+        try:
+            # Use the directory manager to find the project
+            project_path = await self.directory_manager.get_project_path(project_name)
+            
+            if project_path:
+                logger.debug("✅ [PROJECT_MANAGER] Project path resolved", 
+                           project_name=project_name, path=project_path)
+                return project_path
+            else:
+                logger.debug("❓ [PROJECT_MANAGER] Project not found", project_name=project_name)
+                return None
+                
+        except Exception as e:
+            logger.error("❌ [PROJECT_MANAGER] Error resolving project path", 
+                        project_name=project_name, error=str(e))
+            return None
+
+    async def validate_custom_directory(self, directory_path: str) -> Dict[str, Any]:
+        """
+        Validate a custom directory for project creation
+        
+        PHASE 1 NEW METHOD: Provides validation for custom project directories
+        
+        Args:
+            directory_path: Path to validate
+            
+        Returns:
+            Validation result with details
+        """
+        logger.info("🔍 [PROJECT_MANAGER] Validating custom directory", 
+                   directory_path=directory_path)
+        
+        return await self.directory_manager.validate_project_directory(directory_path)
+
+    async def migrate_existing_projects(self) -> Dict[str, Any]:
+        """
+        Migrate existing projects to the new directory mapping system
+        
+        PHASE 1 NEW METHOD: Helps transition existing projects to the new system
+        
+        Returns:
+            Migration report with details
+        """
+        logger.info("🔄 [PROJECT_MANAGER] Starting project migration...")
+        
+        return await self.directory_manager.migrate_existing_projects()
 
     async def _load_project_info(self, project_dir: Path) -> Optional[Dict[str, Any]]:
         """Load basic project information for listing"""
@@ -581,12 +797,19 @@ This is the task list for {project_name}. Tasks are tagged with hashtags to help
 DeployBot will automatically suggest tasks from this list when backend deployments are detected. Tasks tagged with `#backend` will be deprioritized during deploy periods to avoid conflicts.
 """
 
-# Global instance - find the correct projects directory
-def _find_projects_directory():
-    """Find the real projects directory, handling temp directory case"""
-    # Check for environment variable first
+# Global instance with enhanced custom directory support
+# PHASE 1 ENHANCED: Uses intelligent project discovery with environment variable support
+def _get_default_projects_directory():
+    """
+    Get the default projects directory with smart fallback logic
+    
+    This maintains backward compatibility while supporting the new custom directory system
+    """
+    # Check for environment variable first (highest priority)
     projects_root = os.environ.get('DEPLOYBOT_PROJECTS_ROOT')
     if projects_root and Path(projects_root).exists():
+        logger.info("🌍 [PROJECT_MANAGER] Using environment variable DEPLOYBOT_PROJECTS_ROOT", 
+                   path=projects_root)
         return projects_root
     
     current_dir = Path(__file__).parent
@@ -610,6 +833,13 @@ def _find_projects_directory():
         logger.warning("⚠️ [PROJECT_MANAGER] Could not find real projects directory, using fallback")
     
     # Final fallback to original logic
-    return str(current_dir.parent / "projects")
+    fallback_path = str(current_dir.parent / "projects")
+    logger.info("📂 [PROJECT_MANAGER] Using fallback projects directory", path=fallback_path)
+    return fallback_path
 
-project_manager = ProjectManager(_find_projects_directory()) 
+# Initialize the global project manager with custom directory support
+project_manager = ProjectManager(_get_default_projects_directory())
+
+logger.info("🎉 [PROJECT_MANAGER] Global ProjectManager initialized with Phase 1 enhancements", 
+           supports_custom_directories=True,
+           directory_manager_available=hasattr(project_manager, 'directory_manager')) 

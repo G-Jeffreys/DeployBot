@@ -1,5 +1,6 @@
-const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs').promises;
 const log = require('electron-log');
 const ProcessManager = require('./process_manager');
 
@@ -10,8 +11,8 @@ log.transports.console.level = 'debug';
 // Global variables for process management
 let mainWindow;
 let processManager;
-// Better development mode detection - only true if explicitly in development OR Vite server is running
-let isDev = process.env.NODE_ENV === 'development' && process.argv.includes('--dev');
+// Better development mode detection - true if NODE_ENV is development
+let isDev = process.env.NODE_ENV === 'development';
 
 // Custom notification system
 let notificationWindows = new Map(); // notification_id -> BrowserWindow
@@ -582,6 +583,138 @@ function setupIPC() {
     } catch (error) {
       console.error('❌ [IPC] Failed to handle notification action:', error);
       return { success: false, error: error.message };
+    }
+  });
+
+  // Handle directory selection - NEW Phase 2
+  ipcMain.handle('select-directory', async (event, options = {}) => {
+    console.log('📂 [IPC] Directory selection requested:', options);
+    log.info('Directory selection requested', { options });
+    
+    try {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: options.title || 'Select Project Directory',
+        defaultPath: options.defaultPath || process.env.HOME,
+        properties: ['openDirectory', 'createDirectory'],
+        message: options.message || 'Choose a directory for your project'
+      });
+      
+      console.log('📂 [IPC] Directory selection result:', result);
+      
+      if (result.canceled) {
+        return { success: false, canceled: true };
+      }
+      
+      const selectedPath = result.filePaths[0];
+      return { 
+        success: true, 
+        directory: selectedPath,
+        canceled: false 
+      };
+    } catch (error) {
+      console.error('❌ [IPC] Failed to show directory dialog:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Handle directory existence check - NEW Phase 2  
+  ipcMain.handle('check-directory-exists', async (event, directoryPath) => {
+    console.log('📁 [IPC] Checking directory existence:', directoryPath);
+    log.info('Checking directory existence', { directoryPath });
+    
+    try {
+      const stats = await fs.stat(directoryPath);
+      const exists = stats.isDirectory();
+      
+      console.log('📁 [IPC] Directory check result:', { exists, directoryPath });
+      return { 
+        success: true, 
+        exists, 
+        isDirectory: exists,
+        path: directoryPath 
+      };
+    } catch (error) {
+      console.log('📁 [IPC] Directory does not exist:', directoryPath);
+      return { 
+        success: true, 
+        exists: false, 
+        isDirectory: false,
+        path: directoryPath,
+        error: error.code === 'ENOENT' ? 'Directory not found' : error.message
+      };
+    }
+  });
+
+  // Handle directory information - NEW Phase 2
+  ipcMain.handle('get-directory-info', async (event, directoryPath) => {
+    console.log('📊 [IPC] Getting directory information:', directoryPath);
+    log.info('Getting directory information', { directoryPath });
+    
+    try {
+      const stats = await fs.stat(directoryPath);
+      
+      if (!stats.isDirectory()) {
+        return { 
+          success: false, 
+          error: 'Path is not a directory',
+          path: directoryPath 
+        };
+      }
+
+      // Try to read directory contents
+      let files = [];
+      let itemCount = 0;
+      try {
+        const items = await fs.readdir(directoryPath);
+        itemCount = items.length;
+        
+        // Check for common project files
+        files = items.filter(item => {
+          const lower = item.toLowerCase();
+          return lower.includes('package.json') || 
+                 lower.includes('requirements.txt') ||
+                 lower.includes('readme') ||
+                 lower.includes('.git') ||
+                 lower.includes('todo');
+        });
+      } catch (readError) {
+        console.warn('⚠️ [IPC] Could not read directory contents:', readError.message);
+      }
+
+      const info = {
+        success: true,
+        path: directoryPath,
+        exists: true,
+        isDirectory: true,
+        itemCount,
+        hasProjectFiles: files.length > 0,
+        projectFiles: files,
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime,
+        readable: true,
+        writable: true
+      };
+
+      // Test write permissions
+      try {
+        const testFile = path.join(directoryPath, '.deploybot-test-write');
+        await fs.writeFile(testFile, 'test');
+        await fs.unlink(testFile);
+      } catch (writeError) {
+        info.writable = false;
+        info.writeError = writeError.message;
+      }
+
+      console.log('📊 [IPC] Directory info collected:', info);
+      return info;
+    } catch (error) {
+      console.error('❌ [IPC] Failed to get directory info:', error);
+      return { 
+        success: false, 
+        error: error.message,
+        path: directoryPath 
+      };
     }
   });
 

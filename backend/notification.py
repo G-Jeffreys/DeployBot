@@ -583,16 +583,62 @@ You can delete this file after reading the notification.
             "redirect_reason": "notification_task_switch"
         }
         
-        # If project_path is missing, try to construct it from projects root
+        # PHASE 1 ENHANCED: If project_path is missing, use ProjectDirectoryManager to resolve it
         if not context["project_path"]:
-            from pathlib import Path
-            projects_root = Path(__file__).parent.parent / "projects"
-            # Convert project name to filesystem-safe format
-            safe_project_name = project_name.replace(" ", "_").replace("-", "_")
-            context["project_path"] = str(projects_root / safe_project_name)
-            logger.info("🔀 [NOTIFY] Constructed project path", 
-                       project_name=project_name, 
-                       project_path=context["project_path"])
+            try:
+                from project_directory_manager import project_directory_manager
+                import asyncio
+                
+                # Try to resolve project path using directory manager
+                try:
+                    loop = asyncio.get_event_loop()
+                    if not loop.is_running():
+                        resolved_path = loop.run_until_complete(
+                            project_directory_manager.get_project_path(project_name)
+                        )
+                        if resolved_path:
+                            context["project_path"] = resolved_path
+                            logger.info("✅ [NOTIFY] Resolved project path using directory manager", 
+                                       project_name=project_name, 
+                                       project_path=context["project_path"])
+                        else:
+                            # Fallback to constructed path
+                            from pathlib import Path
+                            projects_root = Path(__file__).parent.parent / "projects"
+                            safe_project_name = project_name.replace(" ", "_").replace("-", "_")
+                            context["project_path"] = str(projects_root / safe_project_name)
+                            logger.info("🔄 [NOTIFY] Used fallback project path construction", 
+                                       project_name=project_name, 
+                                       project_path=context["project_path"])
+                    else:
+                        # Already in async context, use fallback
+                        from pathlib import Path
+                        projects_root = Path(__file__).parent.parent / "projects"
+                        safe_project_name = project_name.replace(" ", "_").replace("-", "_")
+                        context["project_path"] = str(projects_root / safe_project_name)
+                        logger.info("🔄 [NOTIFY] Used fallback method in async context", 
+                                   project_name=project_name, 
+                                   project_path=context["project_path"])
+                except Exception as e:
+                    logger.debug("🔄 [NOTIFY] Could not resolve with directory manager", error=str(e))
+                    # Fallback to constructed path
+                    from pathlib import Path
+                    projects_root = Path(__file__).parent.parent / "projects"
+                    safe_project_name = project_name.replace(" ", "_").replace("-", "_")
+                    context["project_path"] = str(projects_root / safe_project_name)
+                    logger.info("🔄 [NOTIFY] Used fallback project path construction", 
+                               project_name=project_name, 
+                               project_path=context["project_path"])
+            except Exception as e:
+                logger.debug("🔄 [NOTIFY] Directory manager not available", error=str(e))
+                # Final fallback to old method
+                from pathlib import Path
+                projects_root = Path(__file__).parent.parent / "projects"
+                safe_project_name = project_name.replace(" ", "_").replace("-", "_")
+                context["project_path"] = str(projects_root / safe_project_name)
+                logger.info("🔄 [NOTIFY] Used legacy project path construction", 
+                           project_name=project_name, 
+                           project_path=context["project_path"])
         
         logger.info("🔀 [NOTIFY] Processing task switch request", 
                    task=task_data.get('text', ''), 

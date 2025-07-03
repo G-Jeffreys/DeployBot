@@ -11,26 +11,20 @@ const TimerDisplay = ({ selectedProject, onTimerUpdate }) => {
   const [isActive, setIsActive] = useState(false)
   const [error, setError] = useState(null)
 
-  // Timer polling for status updates
+  // Timer status monitoring with auto-refresh - MEMORY LEAK FIX: Reduced frequency and better cleanup
   useEffect(() => {
-    console.log('⏰ [TIMER_DISPLAY] Setting up timer monitoring...')
+    console.log('⏰ [TIMER_DISPLAY] Setting up timer monitoring for project:', selectedProject?.name || 'none')
     
+    if (!selectedProject) {
+      console.log('⏰ [TIMER_DISPLAY] No project selected, clearing timer data')
+      setTimerData(null)
+      setIsActive(false)
+      return
+    }
+
     let pollInterval = null
-    
+
     const checkTimerStatus = async () => {
-      if (!selectedProject) {
-        console.log('⏰ [TIMER_DISPLAY] No selected project, clearing timer data')
-        const emptyTimerData = { isActive: false }
-        setTimerData(null)
-        setIsActive(false)
-        
-        // Notify parent component
-        if (typeof onTimerUpdate === 'function') {
-          onTimerUpdate(emptyTimerData)
-        }
-        return
-      }
-      
       try {
         console.log('⏰ [TIMER_DISPLAY] Checking timer status for project:', selectedProject.name)
         
@@ -40,41 +34,49 @@ const TimerDisplay = ({ selectedProject, onTimerUpdate }) => {
         // Handle WebSocket response structure
         const data = response?.data || response
         
-        if (data && data.success && data.timer_status) {
-          const timerStatus = data.timer_status
-          console.log('✅ [TIMER_DISPLAY] Active timer found:', timerStatus)
+        if (data && data.success) {
+          const timerInfo = data.timer_info
+          const wasActive = isActive
           
-          const newTimerData = {
-            projectName: timerStatus.project_name,
-            status: timerStatus.status,
-            remainingSeconds: timerStatus.remaining_seconds,
-            totalDuration: timerStatus.duration_seconds,
-            progressPercentage: timerStatus.progress_percentage,
-            timeRemaining: timerStatus.time_remaining_formatted,
-            deployCommand: timerStatus.deploy_command,
-            isPaused: timerStatus.paused,
-            createdAt: timerStatus.created_at,
-            isActive: timerStatus.status === 'running' || timerStatus.status === 'paused'
-          }
-          
-          setTimerData(newTimerData)
-          setIsActive(newTimerData.isActive)
-          setError(null)
-          
-          // Notify parent component
-          if (typeof onTimerUpdate === 'function') {
-            onTimerUpdate(newTimerData)
+          if (timerInfo && timerInfo.status === 'running' && timerInfo.remaining_seconds > 0) {
+            // Timer is active
+            setTimerData(timerInfo)
+            setIsActive(true)
+            setError(null)
+            
+            // Notify parent about timer state change
+            if (typeof onTimerUpdate === 'function') {
+              onTimerUpdate({ 
+                isActive: true, 
+                ...timerInfo 
+              })
+            }
+            
+            if (!wasActive) {
+              console.log('⏰ [TIMER_DISPLAY] Timer became active')
+            }
+          } else {
+            // No active timer
+            setTimerData(null)
+            setIsActive(false)
+            setError(null)
+            
+            // Notify parent about timer state change
+            if (typeof onTimerUpdate === 'function') {
+              onTimerUpdate({ isActive: false })
+            }
+            
+            if (wasActive) {
+              console.log('⏰ [TIMER_DISPLAY] Timer became inactive')
+            }
           }
         } else {
-          console.log('📭 [TIMER_DISPLAY] No active timer found')
-          const emptyTimerData = { isActive: false }
+          console.log('⚠️ [TIMER_DISPLAY] No timer data or failed response')
           setTimerData(null)
           setIsActive(false)
-          setError(null)
           
-          // Notify parent component
           if (typeof onTimerUpdate === 'function') {
-            onTimerUpdate(emptyTimerData)
+            onTimerUpdate({ isActive: false })
           }
         }
       } catch (error) {
@@ -90,19 +92,20 @@ const TimerDisplay = ({ selectedProject, onTimerUpdate }) => {
         }
       }
     }
-    
+
     // Initial check
     checkTimerStatus()
     
-    // Set up polling every 2 seconds when there's a selected project
+    // MEMORY LEAK FIX: Reduced from 2 seconds to 3 seconds to reduce load
     if (selectedProject) {
-      pollInterval = setInterval(checkTimerStatus, 2000)
+      pollInterval = setInterval(checkTimerStatus, 3000)
     }
-    
+
     return () => {
       console.log('🧹 [TIMER_DISPLAY] Cleaning up timer monitoring...')
       if (pollInterval) {
         clearInterval(pollInterval)
+        pollInterval = null
       }
     }
   }, [selectedProject?.name, onTimerUpdate]) // Include onTimerUpdate in dependencies

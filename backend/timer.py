@@ -21,8 +21,9 @@ class DeployTimer:
         self.active_timers = {}  # project_name -> timer_info
         self.timer_callbacks = []  # Callbacks for timer events
         self.websocket_clients = set()  # WebSocket clients for real-time updates
-        self.update_interval = 1.0  # Update every second
-        self.update_task = None
+        self.websocket_server = None
+        self.update_interval = 2.0  # Update every 2 seconds instead of 1
+        self.timer_update_task = None
         
         logger.info("⏰ [TIMER] DeployTimer initialized")
 
@@ -88,8 +89,8 @@ class DeployTimer:
             self.active_timers[project_name] = timer_info
             
             # Start the update loop if not already running
-            if not self.update_task:
-                self.update_task = asyncio.create_task(self._timer_update_loop())
+            if not self.timer_update_task:
+                self.timer_update_task = asyncio.create_task(self._timer_update_loop())
             
             # Notify callbacks
             await self._notify_timer_event("timer_started", timer_info)
@@ -138,9 +139,9 @@ class DeployTimer:
             del self.active_timers[project_name]
             
             # Stop update loop if no active timers
-            if not self.active_timers and self.update_task:
-                self.update_task.cancel()
-                self.update_task = None
+            if not self.active_timers and self.timer_update_task:
+                self.timer_update_task.cancel()
+                self.timer_update_task = None
             
             logger.info("✅ [TIMER] Timer stopped successfully", 
                        project_name=project_name)
@@ -443,13 +444,13 @@ class DeployTimer:
             await self.stop_timer(project_name, reason="cleanup")
         
         # Cancel update task
-        if self.update_task:
-            self.update_task.cancel()
+        if self.timer_update_task:
+            self.timer_update_task.cancel()
             try:
-                await self.update_task
+                await self.timer_update_task
             except asyncio.CancelledError:
                 pass
-            self.update_task = None
+            self.timer_update_task = None
         
         # Clear WebSocket clients
         self.websocket_clients.clear()
